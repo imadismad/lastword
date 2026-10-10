@@ -1,0 +1,38 @@
+#cloud-config
+# LASTWORD EC2 node bootstrap (Ubuntu 24.04).
+# Installs: build tools, Docker, Go, avalanche-cli, WireGuard, Foundry (cast for checks).
+# Idempotent-ish; re-running the instance is cheap. Avalanche L1 is created by a
+# follow-up script (infra/setup_avalanche.sh) once we SSH in.
+package_update: true
+package_upgrade: false
+packages:
+  - build-essential
+  - git
+  - curl
+  - jq
+  - unzip
+  - wireguard
+  - wireguard-tools
+  - ca-certificates
+write_files:
+  - path: /etc/sysctl.d/99-wireguard.conf
+    content: |
+      net.ipv4.ip_forward=1
+runcmd:
+  # Docker
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  - usermod -aG docker ubuntu
+  # Go (for avalanche-cli build fallback) + avalanche-cli via official installer
+  - su - ubuntu -c 'curl -sSfL https://raw.githubusercontent.com/ava-labs/avalanche-cli/main/scripts/install.sh | sh -s -- -b /home/ubuntu/bin'
+  - echo 'export PATH=$PATH:/home/ubuntu/bin:/home/ubuntu/.foundry/bin' >> /home/ubuntu/.bashrc
+  # Foundry (cast/anvil for quick checks)
+  - su - ubuntu -c 'curl -L https://foundry.paradigm.xyz | bash' || true
+  - su - ubuntu -c '/home/ubuntu/.foundry/bin/foundryup' || true
+  - sysctl --system
+  - touch /home/ubuntu/CLOUD_INIT_DONE
+  - chown ubuntu:ubuntu /home/ubuntu/CLOUD_INIT_DONE

@@ -1,0 +1,56 @@
+{
+  "config": {
+    "chainId": 99999,
+    "homesteadBlock": 0,
+    "eip150Block": 0,
+    "eip155Block": 0,
+    "eip158Block": 0,
+    "byzantiumBlock": 0,
+    "constantinopleBlock": 0,
+    "petersburgBlock": 0,
+    "istanbulBlock": 0,
+    "muirGlacierBlock": 0,
+    "berlinBlock": 0,
+    "londonBlock": 0,
+    "subnetEVMTimestamp": 0,
+    "durangoTimestamp": 0,
+    "etnaTimestamp": 0,
+    "feeConfig": {
+      "gasLimit": 30000000,
+      "minBaseFee": 25000000000,
+      "targetGas": 15000000,
+      "baseFeeChangeDenominator": 36,
+      "minBlockGasCost": 0,
+      "maxBlockGasCost": 1000000,
+      "targetBlockRate": 2,
+      "blockGasCostStep": 200000
+    }
+  },
+  "alloc": {
+    "f39Fd6e51aad88F6F4ce6aB8827279cffFb92266": {
+      "balance": "0xd3c21bcecceda1000000"
+    },
+    "70997970C51812dc3A010C7d01b50e0d17dc79C8": {
+      "balance": "0xd3c21bcecceda1000000"
+    },
+    "3C44CdDdB6a900fa2b585dd299e03d12FA4293BC": {
+      "balance": "0xd3c21bcecceda1000000"
+    },
+    "90F79bf6EB2c4f870365E785982E1f101E93b906": {
+      "balance": "0xd3c21bcecceda1000000"
+    },
+    "15d34AAf54267DB7D7c367839AAf71A00a2C6A65": {
+      "balance": "0xd3c21bcecceda1000000"
+    }
+  },
+  "nonce": "0x0",
+  "timestamp": "0x0",
+  "extraData": "0x",
+  "gasLimit": "0x1C9C380",
+  "difficulty": "0x0",
+  "mixHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "coinbase": "0x0000000000000000000000000000000000000000",
+  "number": "0x0",
+  "gasUsed": "0x0",
+  "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000"
+}

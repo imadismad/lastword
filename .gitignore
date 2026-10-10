@@ -41,3 +41,7 @@ bridge/*journal*.jsonl
 witness/anchors.json
 .gateway.key
 junction/*.log
+
+# scratch / temp command-output files
+/*.txt
+cleaned.txt
