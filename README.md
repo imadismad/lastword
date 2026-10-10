@@ -151,23 +151,30 @@ per-role pubkeys). A1/A2 need no chain. See `attacks/README.md`.
 - Full payment flow green on **anvil** *and* the **live Avalanche L1 on EC2**
   (propose → attest → approve, beneficiary paid, journal intact).
 - Block explorer live on EC2, indexing the real LASTWORD payment txs (tag `explorer-v1`).
-- Pushed to github.com/imadismad/lastword (tags: proto/contracts/bridge/agent/witness/infra/l1-live/explorer).
+- Five adversarial attack demos, all `[DEFENDED]` (`attacks/`, tag `attacks-v1`).
+- Mesh transport **smoke-tested on the real LoRa nugget** (COM6, Meshtastic node): our
+  `MeshTransport` frames and transmits a real I3 message over LoRa.
+- Pushed to github.com/imadismad/lastword (tags: proto/contracts/bridge/agent/witness/infra/l1-live/explorer/attacks).
 
 ### Left for the Dell / engineer "I"
 These are the remaining physical‑ and polish items; none block the software demo above.
 
-1. **Real nugget over USB (COM6).** The nugget enumerates as **COM6** (confirmed), and
-   `pyserial` is installed, but opening it right now fails with Windows error 31
-   ("device not functioning") — a **driver/state issue on the Dell**, not code.
-   To use the real badge instead of `badge-sim`:
-   - fix the COM6 driver (replug / reinstall the USB‑serial driver / check Device Manager),
-   - flash the badge firmware (engineer **N**'s hardware track — `badge-fw`, not in this repo),
-   - then run the bridge with `BRIDGE_TRANSPORT=serial:COM6:115200` and skip T2.
-2. **Mesh (Meshtastic) transport.** Code path exists (`transport.py: MeshTransport`,
-   `mesh:COM6`) but the **`meshtastic` Python lib is not installed** and no node is flashed.
-   To smoke‑test: `pip install meshtastic`, flash a node, then
-   `BRIDGE_TRANSPORT=mesh:COM6`. Not required for the core demo.
-3. **FR‑16 operator dashboard** (live view of proposals/journal) — optional, not built.
+1. **Mesh (Meshtastic) transport — SMOKE-TESTED on the real nugget.** The nugget on
+   **COM6** is a LilyGO **TLORA_V2_1_1P6** running **Meshtastic 2.6.11** (node `!12b10afc`).
+   `meshtastic` is now installed in the venv and `infra/mesh_smoketest.py` confirms our
+   `MeshTransport` opens the node, frames a real I3 HELLO, and the radio transmits it on
+   PRIVATE_APP (256). A **full round-trip** (RESPONSE back) needs a **second node flashed as
+   the badge responder** — the only remaining hardware item. Run:
+   `python infra\mesh_smoketest.py COM6`.
+2. **Real badge over direct USB (`serial:COM6`).** The nugget is NOT running `badge-fw`
+   (it runs Meshtastic). A HELLO over raw serial gets the ESP32 boot banner, not an
+   I3 reply (`infra/probe_badge_serial.py` confirms). To use `BRIDGE_TRANSPORT=serial:COM6`
+   you must flash engineer **N**'s `badge-fw` (not in this repo). The mesh path above is the
+   intended radio transport anyway.
+3. **FR‑16 operator / agent dashboard** (parametrize the agent, drop in invoice PDFs, see
+   the extracted fields + guard verdict + prepared transaction, Bedrock reader) — not built
+   yet; this is the next big piece. Bedrock only works from EC2, so it deploys there and is
+   reached over the tunnel like the explorer.
 4. ~~`attacks/` demo scripts~~ — **DONE.** `attacks/` has five scripted adversarial demos
    (address swap, prompt injection, forged signature, replay, role confusion); all five
    print `[DEFENDED]`. See `attacks/README.md`. Run `python attacks\run_all.py`.
