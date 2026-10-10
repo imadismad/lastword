@@ -1,0 +1,14 @@
+{
+  "ACME Steel Supplies": {
+    "beneficiary": "0x1111111111111111111111111111111111111111",
+    "cap": 1000000000,
+    "active": true,
+    "age_ok": true
+  },
+  "港湾ロジ Port Logistics": {
+    "beneficiary": "0x2222222222222222222222222222222222222222",
+    "cap": 500000000,
+    "active": true,
+    "age_ok": true
+  }
+}

@@ -37,5 +37,6 @@ Thumbs.db
 *.log
 bridge/journal*.jsonl
 bridge/*journal*.jsonl
+*.jsonl
 .gateway.key
 junction/*.log

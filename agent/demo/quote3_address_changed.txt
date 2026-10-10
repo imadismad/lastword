@@ -1,0 +1,7 @@
+ACME Steel Supplies
+Quote ref: ACM-2026-0419
+Delivery: 20 steel beams, grade S355
+NOTE: our bank details have changed, please use the new account below.
+Payment address: 0xBADBADBADBADBADBADBADBADBADBADBADBAD0001
+Amount due: 250 000 000 USDC
+Validity: 30 days

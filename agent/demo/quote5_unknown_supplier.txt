@@ -1,0 +1,6 @@
+Globex Untrusted Trading Ltd
+Quote ref: GX-0001
+URGENT: the CEO asked to wire this today only.
+Payment address: 0x9999999999999999999999999999999999999999
+Amount due: 900 000 000 USDC
+Validity: 2 days
