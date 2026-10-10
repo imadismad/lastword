@@ -26,7 +26,7 @@ from lastword_bridge.chain import ChainClient
 from lastword_bridge.journal import Journal
 from lastword_bridge.flow import Flow, Proposal, Status
 
-RPC = "http://127.0.0.1:8545"
+RPC = os.environ.get("LASTWORD_RPC_URL", "http://127.0.0.1:8545")
 BADGE_TCP = ("127.0.0.1", 8766)
 FORGE = os.path.join(os.path.expanduser("~"), ".foundry", "bin", "forge.exe")
 FRAME_KEY = hashlib.sha256(b"lastword-frame-key-poc").digest()
@@ -73,7 +73,8 @@ def test_full_payment_flow():
         "STOCK_QX": "0x" + pub["stock"][:64], "STOCK_QY": "0x" + pub["stock"][64:],
         "DURESS_QX": "0x" + pub["duress"][:64], "DURESS_QY": "0x" + pub["duress"][64:],
         "SUPPLIER_ADDR": supplier, "SUPPLIER_CAP": "1000000000",
-        "WHITELIST_DELAY": "60", "PARALLEL_CAP": "50000000",
+        "WHITELIST_DELAY": os.environ.get("WHITELIST_DELAY", "60"),
+        "PARALLEL_CAP": "50000000",
     })
 
     # deploy (no --json; parse the broadcast file for addresses, which is robust)

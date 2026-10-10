@@ -353,10 +353,10 @@ contract LastWord {
     // Demo convenience: seed a supplier immediately with a backdated registration so
     // tests/demo don't wait out the timelock. Admin only; clearly not for production.
     function seedSupplierForDemo(address supplier, uint64 cap, uint64 ageSeconds) external onlyAdmin {
-        suppliers[supplier] = Supplier({
-            active: true,
-            cap: cap,
-            registeredAt: uint64(block.timestamp) - ageSeconds
-        });
+        // Backdate registration so the ageing criterion (C2) is already satisfied, but
+        // never underflow on a fresh chain where block.timestamp may be < ageSeconds.
+        uint64 nowTs = uint64(block.timestamp);
+        uint64 registered = ageSeconds >= nowTs ? 0 : nowTs - ageSeconds;
+        suppliers[supplier] = Supplier({active: true, cap: cap, registeredAt: registered});
     }
 }

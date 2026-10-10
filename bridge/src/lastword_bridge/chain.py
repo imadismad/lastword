@@ -8,6 +8,19 @@ from __future__ import annotations
 
 from web3 import Web3
 
+# Avalanche Subnet-EVM is a PoA chain with a longer `extraData` header than L1 Ethereum.
+# web3.py needs the PoA middleware to parse blocks. Import works across web3 v6/v7.
+try:  # web3 >= 6.11 / 7.x
+    from web3.middleware import ExtraDataToPOAMiddleware as _POA_MIDDLEWARE
+    _POA_IS_CLASS = True
+except Exception:  # older web3
+    try:
+        from web3.middleware import geth_poa_middleware as _POA_MIDDLEWARE
+        _POA_IS_CLASS = False
+    except Exception:
+        _POA_MIDDLEWARE = None
+        _POA_IS_CLASS = False
+
 # Minimal ABI matching contracts/src/LastWord.sol (I5).
 ABI = [
     {"type": "function", "name": "propose", "stateMutability": "nonpayable",
@@ -49,6 +62,15 @@ class ChainClient:
     def __init__(self, rpc_url: str, contract_addr: str, private_key: str,
                  agent_private_key: str | None = None):
         self.w3 = Web3(Web3.HTTPProvider(rpc_url))
+        # inject PoA middleware for Avalanche Subnet-EVM (long extraData)
+        if _POA_MIDDLEWARE is not None:
+            try:
+                if _POA_IS_CLASS:
+                    self.w3.middleware_onion.inject(_POA_MIDDLEWARE, layer=0)
+                else:
+                    self.w3.middleware_onion.inject(_POA_MIDDLEWARE, layer=0)
+            except (ValueError, Exception):
+                pass  # already injected or incompatible; non-fatal
         self.acct = self.w3.eth.account.from_key(private_key)          # bridge (gas, attest/approve)
         # The agent proposes with its OWN key (role separation). If not provided,
         # fall back to the bridge key (single-key dev mode).

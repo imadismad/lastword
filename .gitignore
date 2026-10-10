@@ -45,3 +45,6 @@ junction/*.log
 # scratch / temp command-output files
 /*.txt
 cleaned.txt
+
+# WireGuard client config (contains client private key)
+infra/lastword-wg0.conf
