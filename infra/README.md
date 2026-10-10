@@ -54,3 +54,32 @@ Windows OpenSSH can wedge a piped shell. Always use `-n` (stdin from NUL) + `Bat
 
 t3.xlarge is a few $/day; the sandbox account is deleted at the end. Tear down early
 with `python infra/provision_ec2.py --terminate` (or stop the instance) when not in use.
+
+## Block explorer (runs on EC2, against the live L1)
+
+A web block explorer for the LASTWORD L1, from two third-party repos:
+
+- frontend: https://github.com/yassirboudda/codenekt-explorer-frontend (SvelteKit)
+- backend:  https://github.com/yassirboudda/erol-explorer-backend (Koa + ethers6 + MongoDB)
+
+`setup_explorer.sh` deploys both on EC2: MongoDB in Docker, backend API (`:3002`) +
+block indexer, and the frontend (`:3000`), all under pm2 (`lw-api`, `lw-indexer`,
+`lw-frontend`). The Dell views it through the SSH tunnel (`-L 3000 -L 3002 -L 9650`).
+
+```
+scp ... setup_explorer.sh explorer-patches/ ubuntu@<ip>:/home/ubuntu/
+ssh ... "git clone <frontend> explorer/frontend; git clone <backend> explorer/backend; \
+         bash setup_explorer.sh 2L6HsHiCxGeQFBoe5ezfz9ZBtNBZYGKC1QHrDCeQhLPYrW3iZj"
+```
+
+The cloned repos are NOT vendored here (they carry their own `.git`; `/explorer/` is
+gitignored). The few files we changed to make it index LASTWORD transactions live in
+`infra/explorer-patches/` and are copied over the clone by `setup_explorer.sh` — see
+that folder's README for the root cause (block indexer passed tx *objects* where hash
+*strings* were expected, so blocks saved but transactions did not) and the fix.
+
+### Verified
+
+`GET http://127.0.0.1:3002/transactions` (via tunnel) returns the live payment-flow txs
+to the `LastWord` contract — propose, attest, approve, all `status: 1` — i.e. the
+hardware-badge-approved stablecoin payment is visible on-chain in the explorer.
