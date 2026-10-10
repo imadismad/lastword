@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LASTWORD — agent dashboard</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#171a21; --panel2:#1e222b; --line:#2a2f3a;
+    --fg:#e6e9ef; --dim:#8b93a3; --accent:#5b8cff; --ok:#2ecc71; --warn:#f1c40f;
+    --bad:#ff5b6e; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+    font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:14px 20px; border-bottom:1px solid var(--line);
+    display:flex; align-items:center; gap:12px; }
+  header h1 { font-size:16px; margin:0; letter-spacing:.5px; }
+  header .tag { font:12px var(--mono); color:var(--dim); }
+  header .spacer { flex:1; }
+  .pill { font:11px var(--mono); padding:3px 8px; border-radius:999px;
+    border:1px solid var(--line); color:var(--dim); }
+  .pill.up { color:var(--ok); border-color:#1e5f3a; }
+  .pill.down { color:var(--bad); border-color:#5f1e28; }
+  main { display:grid; grid-template-columns:340px 1fr; gap:16px; padding:16px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:14px; margin-bottom:16px; }
+  .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--dim); margin:0 0 12px; }
+  label { display:block; font-size:12px; color:var(--dim); margin:8px 0 3px; }
+  input, select, textarea { width:100%; background:var(--panel2); color:var(--fg);
+    border:1px solid var(--line); border-radius:6px; padding:7px 9px; font-size:13px;
+    font-family:inherit; }
+  textarea { resize:vertical; min-height:90px; font-family:var(--mono); font-size:12px; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:7px;
+    padding:9px 14px; font-size:13px; font-weight:600; cursor:pointer; }
+  button.secondary { background:var(--panel2); border:1px solid var(--line); color:var(--fg); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .row { display:flex; gap:8px; align-items:center; }
+  .row > * { flex:1; }
+  .drop { border:1.5px dashed var(--line); border-radius:10px; padding:26px;
+    text-align:center; color:var(--dim); cursor:pointer; transition:.15s; }
+  .drop.hover { border-color:var(--accent); color:var(--fg); background:#1b2130; }
+  .kv { display:grid; grid-template-columns:150px 1fr; gap:4px 10px; font-size:13px; }
+  .kv .k { color:var(--dim); }
+  .kv .v { font-family:var(--mono); word-break:break-all; }
+  .verdict { font-size:22px; font-weight:700; letter-spacing:.5px; }
+  .verdict.ASK_BADGE { color:var(--ok); }
+  .verdict.REJECT { color:var(--bad); }
+  .verdict.ASK_DELIVERY { color:var(--warn); }
+  .crit { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .crit span { font:11px var(--mono); padding:3px 7px; border-radius:5px;
+    border:1px solid var(--line); }
+  .crit .pass { color:var(--ok); border-color:#1e5f3a; }
+  .crit .fail { color:var(--bad); border-color:#5f1e28; }
+  .crit .warn { color:var(--warn); border-color:#5f531e; }
+  .crit .na { color:var(--dim); }
+  .score { height:7px; border-radius:4px; background:var(--panel2); overflow:hidden; margin-top:4px; }
+  .score > div { height:100%; background:linear-gradient(90deg,var(--ok),var(--warn),var(--bad)); }
+  .steps { list-style:none; padding:0; margin:0; }
+  .steps li { display:flex; align-items:center; gap:10px; padding:8px 0;
+    border-bottom:1px solid var(--line); }
+  .steps li:last-child { border-bottom:0; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--line); flex:none; }
+  .dot.done { background:var(--ok); } .dot.active { background:var(--accent); animation:pulse 1s infinite; }
+  .dot.err { background:var(--bad); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+  .steps a { color:var(--accent); font:12px var(--mono); text-decoration:none; }
+  .muted { color:var(--dim); font-size:12px; }
+  .warnbox { background:#2a2410; border:1px solid #5f531e; color:#f1c40f;
+    padding:8px 10px; border-radius:6px; font-size:12px; margin-top:8px; }
+  pre { background:var(--panel2); border:1px solid var(--line); border-radius:6px;
+    padding:10px; font-size:11px; max-height:200px; overflow:auto; }
+  .hidden { display:none; }
+  .flex { display:flex; gap:8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>LASTWORD</h1>
+  <span class="tag">agent dashboard · the agent proposes, the badge says the last word</span>
+  <span class="spacer"></span>
+  <span class="pill" id="readerPill">reader …</span>
+  <span class="pill" id="bridgePill">bridge …</span>
+</header>
+
+<main>
+  <!-- LEFT: configuration -->
+  <div>
+    <div class="panel">
+      <h2>Agent reader</h2>
+      <label>Backend</label>
+      <select id="readerMode">
+        <option value="local">Local (deterministic, no network)</option>
+        <option value="bedrock">Amazon Bedrock (Converse + guardrail)</option>
+      </select>
+      <div id="bedrockFields" class="hidden">
+        <label>Bedrock model id</label>
+        <input id="bedrockModel" placeholder="anthropic.claude-3-5-sonnet-20240620-v1:0" />
+        <label>Guardrail id (optional)</label>
+        <input id="bedrockGuardrail" placeholder="(empty = none)" />
+        <label>Region</label>
+        <input id="region" placeholder="us-east-1" />
+        <div class="warnbox">Bedrock must be reachable from where this server runs
+          (EC2). On the Dell it is blocked and the agent falls back to local.</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Policy</h2>
+      <label>Per-transaction cap (smallest unit)</label>
+      <input id="perTxCap" type="number" />
+      <label>Daily cap</label>
+      <input id="dailyCap" type="number" />
+      <label>Allowed currencies (comma-sep)</label>
+      <input id="currencies" />
+    </div>
+
+    <div class="panel">
+      <h2>Supplier whitelist</h2>
+      <p class="muted">JSON: supplier → {beneficiary, cap, active}</p>
+      <textarea id="whitelist" spellcheck="false"></textarea>
+      <div class="flex" style="margin-top:10px">
+        <button id="saveCfg">Save config</button>
+        <button class="secondary" id="reloadCfg">Reload</button>
+      </div>
+      <div class="muted" id="cfgMsg" style="margin-top:6px"></div>
+    </div>
+  </div>
+
+  <!-- RIGHT: evaluate + prepare + submit -->
+  <div>
+    <div class="panel">
+      <h2>1 · Invoice / quote</h2>
+      <div class="drop" id="drop">Drop a PDF / EML / TXT here, or click to choose</div>
+      <input id="file" type="file" class="hidden" accept=".pdf,.eml,.txt,.text" />
+      <label style="margin-top:12px">…or paste the quote text</label>
+      <textarea id="pasteText" placeholder="Paste quote text to evaluate without a file"></textarea>
+      <div class="row" style="margin-top:10px">
+        <div><label>Deadline (minutes)</label><input id="deadline" type="number" value="10" /></div>
+        <div><label>Token index</label><input id="token" type="number" value="0" /></div>
+        <div style="display:flex;align-items:flex-end"><button id="evalBtn">Evaluate</button></div>
+      </div>
+      <div class="muted" id="evalMsg" style="margin-top:6px"></div>
+    </div>
+
+    <div class="panel hidden" id="resultPanel">
+      <h2>2 · Prepared transaction</h2>
+      <div class="flex" style="align-items:center; gap:16px">
+        <div class="verdict" id="verdict">—</div>
+        <div style="flex:1">
+          <div class="muted">risk score <span id="scoreNum"></span></div>
+          <div class="score"><div id="scoreBar" style="width:0%"></div></div>
+        </div>
+        <div class="muted" id="readerName"></div>
+      </div>
+      <div class="warnbox hidden" id="injWarn"></div>
+      <p class="muted" id="explanation" style="margin:10px 0"></p>
+
+      <div class="kv" id="extracted"></div>
+      <div class="crit" id="criteria"></div>
+
+      <details style="margin-top:12px">
+        <summary class="muted">extracted (raw reader output) + document preview</summary>
+        <pre id="rawExtract"></pre>
+        <pre id="docPreview"></pre>
+      </details>
+
+      <div style="margin-top:14px">
+        <button id="submitBtn" disabled>Send to badge → pay on L1</button>
+        <span class="muted" id="submitHint"></span>
+      </div>
+    </div>
+
+    <div class="panel hidden" id="flowPanel">
+      <h2>3 · Live payment flow</h2>
+      <ul class="steps" id="steps">
+        <li><span class="dot" id="dot-propose"></span> propose (agent key, on-chain) <a id="lk-propose" target="_blank"></a></li>
+        <li><span class="dot" id="dot-attest"></span> attest delivery (STOCK badge signature) <a id="lk-attest" target="_blank"></a></li>
+        <li><span class="dot" id="dot-approve"></span> approve + pay (DAF badge signature) <a id="lk-approve" target="_blank"></a></li>
+      </ul>
+      <div class="muted" id="flowStatus" style="margin-top:10px"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let CONFIG = null, LAST = null;
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) { let d; try { d = (await r.json()).detail; } catch { d = r.statusText; } throw new Error(d || r.statusText); }
+  return r.json();
+}
+
+function fmtPolicyToUI(c) {
+  $('perTxCap').value = c.policy.per_tx_cap ?? '';
+  $('dailyCap').value = c.policy.daily_cap ?? '';
+  $('currencies').value = (c.policy.allowed_currencies || []).join(', ');
+  $('whitelist').value = JSON.stringify(c.whitelist, null, 2);
+  $('readerMode').value = c.reader_mode;
+  $('bedrockModel').value = c.bedrock_model || '';
+  $('bedrockGuardrail').value = c.bedrock_guardrail || '';
+  $('region').value = c.region || '';
+  toggleBedrock();
+}
+function toggleBedrock() {
+  $('bedrockFields').classList.toggle('hidden', $('readerMode').value !== 'bedrock');
+}
+
+async function loadConfig() {
+  CONFIG = await api('/api/config');
+  fmtPolicyToUI(CONFIG);
+  $('readerPill').textContent = 'reader: ' + CONFIG.reader_mode;
+}
+async function saveConfig() {
+  let wl;
+  try { wl = JSON.parse($('whitelist').value); }
+  catch (e) { $('cfgMsg').textContent = 'whitelist is not valid JSON'; return; }
+  const body = {
+    policy: {
+      per_tx_cap: Number($('perTxCap').value),
+      daily_cap: Number($('dailyCap').value),
+      allowed_currencies: $('currencies').value.split(',').map(s => s.trim()).filter(Boolean),
+    },
+    whitelist: wl,
+    reader_mode: $('readerMode').value,
+    bedrock_model: $('bedrockModel').value,
+    bedrock_guardrail: $('bedrockGuardrail').value,
+    region: $('region').value,
+  };
+  CONFIG = await api('/api/config', {method:'PUT', headers:{'content-type':'application/json'}, body: JSON.stringify(body)});
+  $('cfgMsg').textContent = 'saved ✓';
+  $('readerPill').textContent = 'reader: ' + CONFIG.reader_mode;
+  setTimeout(() => $('cfgMsg').textContent = '', 2000);
+}
+
+async function pollBridge() {
+  try { const h = await api('/api/bridge_health');
+    $('bridgePill').textContent = h.up ? 'bridge: up' : 'bridge: down';
+    $('bridgePill').className = 'pill ' + (h.up ? 'up' : 'down');
+  } catch { $('bridgePill').textContent = 'bridge: down'; $('bridgePill').className = 'pill down'; }
+}
+
+function renderResult(res) {
+  LAST = res;
+  $('resultPanel').classList.remove('hidden');
+  $('flowPanel').classList.add('hidden');
+  $('verdict').textContent = res.verdict;
+  $('verdict').className = 'verdict ' + res.verdict;
+  $('scoreNum').textContent = res.score;
+  $('scoreBar').style.width = Math.round(res.score * 100) + '%';
+  $('readerName').textContent = res.reader;
+  $('explanation').textContent = res.explanation;
+
+  const rs = (res.extracted && res.extracted.risk_signals) || {};
+  const inj = $('injWarn');
+  if (rs.injection_suspected) {
+    inj.classList.remove('hidden');
+    inj.textContent = '⚠ Hidden instruction detected in the document — flagged as data, NOT executed. '
+      + (rs.hidden_instruction_text ? '“' + rs.hidden_instruction_text + '”' : '');
+  } else inj.classList.add('hidden');
+
+  const e = res.extracted || {};
+  $('extracted').innerHTML = [
+    ['supplier', e.supplier_name], ['beneficiary', e.beneficiary],
+    ['amount', e.amount], ['currency', e.currency], ['quote ref', e.quote_ref],
+    ['quote hash', res.quote_hash], ['flags', '0x' + (res.flags||0).toString(16)],
+  ].map(([k,v]) => `<div class="k">${k}</div><div class="v">${v ?? ''}</div>`).join('');
+
+  $('criteria').innerHTML = Object.entries(res.reasons || {})
+    .map(([c, st]) => `<span class="${st}">${c}:${st}</span>`).join('');
+
+  $('rawExtract').textContent = JSON.stringify(res.extracted, null, 2);
+  $('docPreview').textContent = res.document_preview || '';
+
+  const canSubmit = res.verdict === 'ASK_BADGE' && !!res.proposal;
+  $('submitBtn').disabled = !canSubmit;
+  $('submitHint').textContent = canSubmit
+    ? 'the only approval authority is the badge signature + the contract'
+    : (res.verdict === 'REJECT' ? 'rejected by the guard — never reaches the badge' : '');
+}
+
+async function evaluate() {
+  $('evalMsg').textContent = 'reading…';
+  try {
+    let res;
+    const f = $('file').files[0];
+    if (f) {
+      const fd = new FormData();
+      fd.append('file', f);
+      fd.append('deadline_mins', $('deadline').value);
+      fd.append('token', $('token').value);
+      res = await api('/api/evaluate', {method:'POST', body: fd});
+    } else if ($('pasteText').value.trim()) {
+      res = await api('/api/evaluate_text', {method:'POST', headers:{'content-type':'application/json'},
+        body: JSON.stringify({text:$('pasteText').value, deadline_mins:Number($('deadline').value), token:Number($('token').value)})});
+    } else { $('evalMsg').textContent = 'drop a file or paste text first'; return; }
+    $('evalMsg').textContent = '';
+    renderResult(res);
+  } catch (e) { $('evalMsg').textContent = 'error: ' + e.message; }
+}
+
+function setDot(step, cls) { $('dot-' + step).className = 'dot ' + cls; }
+function setLink(step, url) { const a = $('lk-' + step); if (url) { a.href = url; a.textContent = 'view tx ↗'; } }
+
+async function submit() {
+  if (!LAST || !LAST.proposal) return;
+  $('submitBtn').disabled = true;
+  $('flowPanel').classList.remove('hidden');
+  ['propose','attest','approve'].forEach(s => setDot(s, ''));
+  setDot('propose', 'active');
+  $('flowStatus').textContent = 'submitting to the bridge…';
+  let reqId;
+  try {
+    const r = await api('/api/submit', {method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({proposal: LAST.proposal})});
+    reqId = r.reqId;
+  } catch (e) { $('flowStatus').textContent = 'bridge error: ' + e.message; setDot('propose','err'); return; }
+
+  const STATE = {
+    proposed:   () => { setDot('propose','done'); setDot('attest','active'); },
+    sent_stock: () => { setDot('propose','done'); setDot('attest','active'); },
+    attested:   () => { setDot('propose','done'); setDot('attest','done'); setDot('approve','active'); },
+    sent_daf:   () => { setDot('propose','done'); setDot('attest','done'); setDot('approve','active'); },
+    approved:   () => { ['propose','attest','approve'].forEach(s=>setDot(s,'done')); },
+    refused:    () => setDot('approve','err'),
+    error:      () => setDot('approve','err'),
+    expired:    () => setDot('approve','err'),
+  };
+
+  for (let i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 1500));
+    let s;
+    try { s = await api('/api/status/' + reqId); } catch { continue; }
+    (STATE[s.status] || (()=>{}))();
+    setLink('propose', s.explorer_links && s.explorer_links.propose);
+    setLink('attest', s.explorer_links && s.explorer_links.attest);
+    setLink('approve', s.explorer_links && s.explorer_links.approve);
+    $('flowStatus').textContent = 'status: ' + s.status + (s.detail ? ' — ' + s.detail : '');
+    if (['approved','refused','error','expired'].includes(s.status)) {
+      if (s.status === 'approved') $('flowStatus').textContent = '✓ PAID on the live L1 — the badge said the last word.';
+      break;
+    }
+  }
+}
+
+// wiring
+$('readerMode').onchange = toggleBedrock;
+$('saveCfg').onclick = saveConfig;
+$('reloadCfg').onclick = loadConfig;
+$('evalBtn').onclick = evaluate;
+$('submitBtn').onclick = submit;
+const drop = $('drop');
+drop.onclick = () => $('file').click();
+$('file').onchange = () => { if ($('file').files[0]) { drop.textContent = $('file').files[0].name; $('pasteText').value=''; } };
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('hover'); };
+drop.ondragleave = () => drop.classList.remove('hover');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('hover');
+  $('file').files = e.dataTransfer.files; if ($('file').files[0]) drop.textContent = $('file').files[0].name; };
+
+loadConfig();
+pollBridge();
+setInterval(pollBridge, 5000);
+</script>
+</body>
+</html>

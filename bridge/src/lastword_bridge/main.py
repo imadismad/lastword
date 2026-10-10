@@ -67,9 +67,13 @@ def build_flow() -> Flow:
     rpc = os.environ.get("LASTWORD_RPC_URL", "http://127.0.0.1:8545")
     contract = os.environ["LASTWORD_CONTRACT_ADDRESS"]
     pk = os.environ["BRIDGE_PRIVATE_KEY"]
+    # The agent proposes with its OWN key (contract enforces onlyAgent). If a distinct
+    # agent key is provided, use it for propose; otherwise fall back to the bridge key
+    # (single-key dev mode, only valid when agent==bridge on-chain).
+    agent_pk = os.environ.get("AGENT_PRIVATE_KEY")
     transport_spec = os.environ.get("BRIDGE_TRANSPORT", "tcp:127.0.0.1:8766")
 
-    chain = ChainClient(rpc, contract, pk)
+    chain = ChainClient(rpc, contract, pk, agent_private_key=agent_pk)
     gateway = (GatewayKey.from_seed(os.environ["GATEWAY_SEED"].encode())
                if os.environ.get("GATEWAY_SEED") else GatewayKey.from_seed())
     journal = Journal(os.path.join(ROOT, "bridge", "journal.jsonl"))

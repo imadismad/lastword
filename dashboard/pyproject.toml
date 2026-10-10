@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lastword-dashboard"
+version = "1.0.0"
+description = "LASTWORD agent operator dashboard (FR-16): parametrize, ingest invoices, prepare + pay"
+requires-python = ">=3.11"
+dependencies = [
+    "lastword-agent",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "python-multipart>=0.0.9",
+    "jsonschema>=4",
+    "pypdf>=4",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+bedrock = ["boto3>=1.34"]

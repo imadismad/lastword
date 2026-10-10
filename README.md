@@ -102,6 +102,22 @@ transactions appear, all `status: 1`.
 That contrast — legit pays, tampered/injected does not, and the *badge* is what gates it —
 is the whole pitch.
 
+### Or drive it all from the dashboard (the showpiece)
+
+Instead of the CLI, run the operator console and do the whole thing in a browser:
+
+```powershell
+# with the bridge (T3) up:
+$env:BRIDGE_URL="http://127.0.0.1:8099"
+.\.venv\Scripts\python.exe -m uvicorn dashboard.server:app --host 127.0.0.1 --port 8090
+# open http://127.0.0.1:8090
+```
+
+Drop an invoice (PDF/EML/TXT, e.g. `agent/demo/quote1_legit.txt`), watch the prepared
+transaction appear (extracted fields, verdict, C1–C14, risk score), then **Send to badge →
+pay on L1** and see propose/attest/approve light up with explorer links. On EC2 flip the
+reader to **Bedrock**. See `dashboard/README.md`.
+
 ---
 
 ## 4. Fastest proof (one command)
@@ -154,6 +170,8 @@ per-role pubkeys). A1/A2 need no chain. See `attacks/README.md`.
 - Five adversarial attack demos, all `[DEFENDED]` (`attacks/`, tag `attacks-v1`).
 - Mesh transport **smoke-tested on the real LoRa nugget** (COM6, Meshtastic node): our
   `MeshTransport` frames and transmits a real I3 message over LoRa.
+- **Agent operator dashboard** (`dashboard/`): invoice → prepared transaction → badge → L1
+  payment, driven from the browser; verified end-to-end.
 - Pushed to github.com/imadismad/lastword (tags: proto/contracts/bridge/agent/witness/infra/l1-live/explorer/attacks).
 
 ### Left for the Dell / engineer "I"
@@ -171,10 +189,12 @@ These are the remaining physical‑ and polish items; none block the software de
    I3 reply (`infra/probe_badge_serial.py` confirms). To use `BRIDGE_TRANSPORT=serial:COM6`
    you must flash engineer **N**'s `badge-fw` (not in this repo). The mesh path above is the
    intended radio transport anyway.
-3. **FR‑16 operator / agent dashboard** (parametrize the agent, drop in invoice PDFs, see
-   the extracted fields + guard verdict + prepared transaction, Bedrock reader) — not built
-   yet; this is the next big piece. Bedrock only works from EC2, so it deploys there and is
-   reached over the tunnel like the explorer.
+3. ~~FR‑16 operator / agent dashboard~~ — **DONE.** `dashboard/` is a web console to
+   parametrize the agent (policy + whitelist + Local/Bedrock reader), drop in an invoice
+   (PDF/EML/TXT), see the prepared transaction (extracted fields, verdict, C1–C14, risk,
+   flags), and **Send to badge → pay on the live L1** with per-step explorer links. Verified
+   end-to-end (`python dashboard\test_e2e.py`). Bedrock only works from EC2, so deploy there
+   with `infra/setup_dashboard.sh` and reach it over the tunnel (`-L 8090:127.0.0.1:8090`).
 4. ~~`attacks/` demo scripts~~ — **DONE.** `attacks/` has five scripted adversarial demos
    (address swap, prompt injection, forged signature, replay, role confusion); all five
    print `[DEFENDED]`. See `attacks/README.md`. Run `python attacks\run_all.py`.
