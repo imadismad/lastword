@@ -24,6 +24,8 @@ node_modules/
 contracts/out/
 contracts/cache/
 contracts/broadcast/
+contracts/lib/
+*.log
 
 # OS / editors
 .DS_Store
