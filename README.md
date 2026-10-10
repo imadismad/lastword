@@ -127,6 +127,20 @@ Local‑only variant (no EC2): run `anvil --port 8545` and leave `.env` on `:854
 
 `witness/` anchors the Merkle root to Fuji + S3 for an external, independent timestamp.
 
+### Show the attacks fail (the security half of the demo)
+
+With the chain + badge-sim up (section 3), run the adversarial suite — each prints
+`[DEFENDED]`:
+
+```powershell
+$env:LASTWORD_RPC_URL = "http://127.0.0.1:9650/ext/bc/2L6HsHiCxGeQFBoe5ezfz9ZBtNBZYGKC1QHrDCeQhLPYrW3iZj/rpc"
+.\.venv\Scripts\python.exe attacks\run_all.py
+```
+
+Address swap and prompt injection are stopped at the agent (C1 / C12); forged signature,
+replay, and role confusion are stopped by the contract (`P256.verify`, terminal state,
+per-role pubkeys). A1/A2 need no chain. See `attacks/README.md`.
+
 ---
 
 ## 6. Status — what is DONE vs what is LEFT for the Dell / engineer "I"
@@ -154,8 +168,9 @@ These are the remaining physical‑ and polish items; none block the software de
    To smoke‑test: `pip install meshtastic`, flash a node, then
    `BRIDGE_TRANSPORT=mesh:COM6`. Not required for the core demo.
 3. **FR‑16 operator dashboard** (live view of proposals/journal) — optional, not built.
-4. **`attacks/` demo scripts** (scripted replay/tamper/duress attempts) — optional, not built;
-   quote3/4/5 already demonstrate the rejections manually.
+4. ~~`attacks/` demo scripts~~ — **DONE.** `attacks/` has five scripted adversarial demos
+   (address swap, prompt injection, forged signature, replay, role confusion); all five
+   print `[DEFENDED]`. See `attacks/README.md`. Run `python attacks\run_all.py`.
 5. **WireGuard client on the Dell** — optional. The SSH tunnel (section 2) is the working
    path; the WireGuard *server* is set up on EC2, but installing the Dell client needs one
    admin‑elevated command (`wireguard /installtunnelservice infra\lastword-wg0.conf`).
