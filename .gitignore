@@ -36,4 +36,6 @@ Thumbs.db
 # Logs / journals (runtime data, not source)
 *.log
 bridge/journal*.jsonl
+bridge/*journal*.jsonl
+.gateway.key
 junction/*.log

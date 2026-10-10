@@ -1,0 +1,117 @@
+"""Badge transports: tcp (badge-sim), serial (badge in direct USB), mesh (Meshtastic).
+
+All speak I3: send a COBS-framed message, read a COBS-framed reply (ends with 0x00).
+The transport only moves bytes; it never reads or forges the sealed I2 frame inside.
+"""
+from __future__ import annotations
+
+import socket
+import time
+
+from lastword_proto import pack_message, unpack_message, Command
+
+
+class TransportError(Exception):
+    pass
+
+
+def _read_cobs(recv_byte) -> bytes:
+    buf = bytearray()
+    while True:
+        b = recv_byte()
+        if not b:
+            raise TransportError("connection closed before frame delimiter")
+        buf += b
+        if b == b"\x00":
+            return bytes(buf)
+
+
+class TcpTransport:
+    """Talks to badge-sim over TCP."""
+    def __init__(self, host: str, port: int, timeout: float = 15.0):
+        self.host, self.port, self.timeout = host, port, timeout
+
+    def exchange(self, command: int, data: bytes = b"") -> tuple[int, bytes]:
+        with socket.create_connection((self.host, self.port), timeout=self.timeout) as s:
+            s.settimeout(self.timeout)
+            s.sendall(pack_message(command, data))
+            frame = _read_cobs(lambda: s.recv(1))
+        return unpack_message(frame)
+
+
+class SerialTransport:
+    """Talks to a badge over a direct USB serial port (pyserial)."""
+    def __init__(self, port: str, baud: int = 115200, timeout: float = 15.0):
+        import serial  # lazy import
+        self._serial = serial
+        self.port, self.baud, self.timeout = port, baud, timeout
+
+    def exchange(self, command: int, data: bytes = b"") -> tuple[int, bytes]:
+        with self._serial.Serial(self.port, self.baud, timeout=self.timeout) as ser:
+            ser.write(pack_message(command, data))
+            ser.flush()
+            buf = bytearray()
+            deadline = time.time() + self.timeout
+            while time.time() < deadline:
+                b = ser.read(1)
+                if not b:
+                    continue
+                buf += b
+                if b == b"\x00":
+                    return unpack_message(bytes(buf))
+            raise TransportError("serial read timed out")
+
+
+class MeshTransport:
+    """Talks to the badge over Meshtastic (PRIVATE_APP port). Requires the meshtastic lib
+    and a T3 node on a serial port. Sends the I3 message as a data payload with wantAck,
+    and waits for the reply payload on the same port. (Node 1 side; the HP junction relays
+    to the badge over node 3 in the full PoC.)"""
+    PRIVATE_APP = 256
+
+    def __init__(self, dev_port: str, dest: str = "^all", timeout: float = 30.0,
+                 retries: int = 3):
+        self.dev_port, self.dest, self.timeout, self.retries = dev_port, dest, timeout, retries
+
+    def exchange(self, command: int, data: bytes = b"") -> tuple[int, bytes]:
+        import meshtastic.serial_interface  # lazy import
+        from pubsub import pub
+        iface = meshtastic.serial_interface.SerialInterface(devPath=self.dev_port)
+        reply = {"frame": None}
+
+        def on_receive(packet, interface):
+            dec = packet.get("decoded", {})
+            if dec.get("portnum") == "PRIVATE_APP" or dec.get("portnum") == self.PRIVATE_APP:
+                payload = dec.get("payload")
+                if payload:
+                    reply["frame"] = payload
+
+        pub.subscribe(on_receive, "meshtastic.receive")
+        try:
+            msg = pack_message(command, data)
+            deadline = time.time() + self.timeout
+            iface.sendData(msg, destinationId=self.dest, portNum=self.PRIVATE_APP,
+                           wantAck=True)
+            while time.time() < deadline and reply["frame"] is None:
+                time.sleep(0.2)
+            if reply["frame"] is None:
+                raise TransportError("mesh reply timed out")
+            return unpack_message(reply["frame"])
+        finally:
+            iface.close()
+
+
+def make_transport(spec: str):
+    """spec: 'tcp:host:port' | 'serial:COMx[:baud]' | 'mesh:COMx'."""
+    kind, _, rest = spec.partition(":")
+    if kind == "tcp":
+        host, port = rest.split(":")
+        return TcpTransport(host, int(port))
+    if kind == "serial":
+        parts = rest.split(":")
+        port = parts[0]
+        baud = int(parts[1]) if len(parts) > 1 else 115200
+        return SerialTransport(port, baud)
+    if kind == "mesh":
+        return MeshTransport(rest)
+    raise ValueError(f"unknown transport: {spec}")

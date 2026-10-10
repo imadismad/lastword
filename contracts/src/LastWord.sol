@@ -173,6 +173,23 @@ contract LastWord {
         return uint32(bytes4(intent[2:6]));
     }
 
+    /// @dev The stock and DAF intents for a reqId may differ only in role bits (flags
+    ///      bits 0-1) and nonce. All economic fields must equal the stored request,
+    ///      so a signature cannot be redirected to a different beneficiary/amount/quote.
+    function _requireSameEconomics(Request storage req, bytes calldata intent, uint32 reqId)
+        internal
+        view
+    {
+        require(intent.length == 79, "intent!=79");
+        if (_reqId(intent) != reqId) revert HardCriterion(7);
+        Request memory d = _decode(intent);
+        if (d.beneficiary != req.beneficiary) revert HardCriterion(7);
+        if (d.token != req.token) revert HardCriterion(7);
+        if (d.amount != req.amount) revert HardCriterion(7);
+        if (d.quoteHash != req.quoteHash) revert HardCriterion(7);
+        if (d.deadline != req.deadline) revert HardCriterion(7);
+    }
+
     // --------------------------------------------------------------- STEP 1
     /// @notice Agent proposes. Enforces hard criteria C1,C3,C6,C8,C9 on-chain.
     ///         (C11-C13 are off-chain and ride in the agent's signed verdict/flags.)
@@ -209,26 +226,31 @@ contract LastWord {
     }
 
     // --------------------------------------------------------------- STEP 2
-    /// @notice Requester attests delivery with the STOCK P-256 key (role bits 01).
-    function attestDelivery(uint32 reqId, bytes32 r_, bytes32 s_)
+    /// @notice Requester attests delivery. The caller supplies the STOCK intent (role
+    ///         bits 01); the contract recomputes its digest and checks it binds to the
+    ///         same economic fields as the proposed request, then verifies the STOCK
+    ///         P-256 signature. Role separation is enforced by WHICH key signs.
+    function attestDelivery(uint32 reqId, bytes calldata stockIntent, bytes32 r_, bytes32 s_)
         external
         onlyBridge
         notPaused
     {
         Request storage req = requests[reqId];
         if (req.state != State.Proposed) revert BadState();
-        // Role separation is enforced by WHICH key signs: a stock-key signature
-        // cannot verify under the DAF pubkey and vice-versa.
-        if (!P256.verify(req.digest, r_, s_, stockQx, stockQy)) revert BadSignature();
+        _requireSameEconomics(req, stockIntent, reqId);
+        bytes32 dg = computeDigest(stockIntent);
+        if (!P256.verify(dg, r_, s_, stockQx, stockQy)) revert BadSignature();
         req.state = State.Attested;
         emit Attested(reqId);
     }
 
     // --------------------------------------------------------------- STEP 3
-    /// @notice DAF approves with a P-256 badge signature. The contract tries the DAF
-    ///         key then the duress key (at most two verifications). On duress it pays
-    ///         from the capped parallel vault; the public event is identical.
-    function approve(uint32 reqId, bytes32 r_, bytes32 s_)
+    /// @notice DAF approves. The caller supplies the DAF intent (role bits 10); the
+    ///         contract recomputes its digest, checks it binds to the same economic
+    ///         fields, then tries the DAF key then the duress key (at most two
+    ///         verifications). On duress it pays from the capped parallel vault; the
+    ///         public event is identical.
+    function approve(uint32 reqId, bytes calldata dafIntent, bytes32 r_, bytes32 s_)
         external
         onlyBridge
         notPaused
@@ -241,9 +263,11 @@ contract LastWord {
             revert HardCriterion(8);
         }
         if (usedNonce[req.nonce]) revert HardCriterion(99);           // anti-replay
+        _requireSameEconomics(req, dafIntent, reqId);
+        bytes32 dg = computeDigest(dafIntent);
 
         // Role separation enforced by WHICH key signs (DAF or duress pubkey).
-        bool normal = P256.verify(req.digest, r_, s_, dafQx, dafQy);
+        bool normal = P256.verify(dg, r_, s_, dafQx, dafQy);
         bool isDuress = false;
         if (!normal) {
             isDuress = P256.verify(req.digest, r_, s_, duressQx, duressQy);
