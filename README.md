@@ -1,1 +1,165 @@
-# lastword
+# LASTWORD — demo runbook
+
+> An AI agent reads a supplier quote and *prepares* a stablecoin payment. It can never
+> release funds. Only a physical hardware badge (P‑256 signature) can approve, and a
+> smart contract is the sole authority. The agent proposes; the badge says the last word.
+
+This is the demo guide. Component internals live in each sub‑README
+(`proto/`, `contracts/`, `bridge/`, `agent/`, `witness/`, `infra/`).
+
+---
+
+## 0. The three roles in the demo
+
+| Role | Where | What it does |
+|------|-------|--------------|
+| **Agent (applicatif A)** | Dell (or EC2 for Bedrock) | reads the quote, applies guard C1–C14, can only emit a typed proposal — holds no key, no payment power |
+| **Bridge (applicatif B)** | Dell, engineer **"I"** | local I4 API, drives the badge over tcp/serial/mesh, submits to the contract, keeps the hash‑chained journal — its key pays **gas only** |
+| **Badge (applicatif C)** | hardware nugget, or `badge-sim` | holds the P‑256 keys, signs the sealed intent — the **only** approval authority |
+
+The chain is a real **Avalanche L1** on EC2 (chainId 99999). Anvil is the local fallback.
+
+---
+
+## 1. What runs where
+
+```
+            Dell (engineer "I")                          EC2 (us-east-1)
+  ┌────────────────────────────────┐          ┌──────────────────────────────┐
+  │ agent  → bridge (I4 :8099)      │  SSH -L  │ Avalanche L1 RPC :9650        │
+  │ badge-sim :8766  (or nugget COM6)│ ───────► │ block explorer :3000 / :3002  │
+  │ RPC via tunnel → 127.0.0.1:9650 │          │ MongoDB (Docker)              │
+  └────────────────────────────────┘          └──────────────────────────────┘
+```
+
+The Dell reaches the EC2 L1 RPC and the explorer through one SSH tunnel.
+
+---
+
+## 2. One‑time setup (Dell)
+
+```powershell
+# Python venv (already created at .venv). Foundry installed natively at %USERPROFILE%\.foundry\bin
+# Copy env and fill in the sandbox creds + chain:
+Copy-Item .env.example .env     # then edit (NEVER commit .env — it is gitignored)
+```
+
+`.env` for the **live L1 demo** needs:
+
+```
+AWS_DEFAULT_REGION=us-east-1
+AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_SESSION_TOKEN=...   # STS sandbox
+LASTWORD_RPC_URL=http://127.0.0.1:9650/ext/bc/2L6HsHiCxGeQFBoe5ezfz9ZBtNBZYGKC1QHrDCeQhLPYrW3iZj/rpc
+LASTWORD_CHAIN_ID=99999
+LASTWORD_CONTRACT_ADDRESS=<LastWord address printed by the deploy step>
+BRIDGE_PRIVATE_KEY=0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a
+WHITELIST_DELAY=0
+```
+
+Open the tunnel to EC2 (keep it running in its own terminal):
+
+```powershell
+ssh -N -i infra\lastword-key.pem -o StrictHostKeyChecking=no `
+    -L 9650:127.0.0.1:9650 -L 3000:127.0.0.1:3000 -L 3002:127.0.0.1:3002 `
+    ubuntu@13.223.184.99
+```
+
+---
+
+## 3. The demo — software badge (works today, no hardware)
+
+Four terminals on the Dell. This is the path proven green end‑to‑end on the live L1.
+
+```powershell
+# T1 — tunnel (section 2, left running)
+
+# T2 — software badge
+.\.venv\Scripts\python.exe .\badge-sim\badge_sim.py --tcp 127.0.0.1:8766 --auto
+
+# T3 — bridge (reads .env; talks to badge over tcp, submits to the L1)
+$env:BRIDGE_TRANSPORT = "tcp:127.0.0.1:8766"
+.\.venv\Scripts\python.exe -m lastword_bridge.main
+
+# T4 — agent: feed it a quote, it decides REJECT / ASK_BADGE and (if ASK_BADGE) proposes
+.\.venv\Scripts\python.exe -m lastword_agent.cli agent\demo\quote1_legit.txt `
+    --whitelist agent\demo\whitelist.json --bridge http://127.0.0.1:8099
+```
+
+Then show the payment on the **block explorer**: open <http://127.0.0.1:3000> (via the
+tunnel) and point at the `LastWord` contract — the propose / attest / approve
+transactions appear, all `status: 1`.
+
+### The five demo quotes (`agent/demo/`)
+
+| Quote | Expected verdict | Point it makes |
+|-------|------------------|----------------|
+| `quote1_legit.txt` | **ASK_BADGE** → PAID | happy path: badge signs, contract pays |
+| `quote2_legit.txt` | **ASK_BADGE** → PAID | second legit supplier |
+| `quote3_address_changed.txt` | **REJECT (C1)** | beneficiary ≠ whitelist → never reaches the badge |
+| `quote4_injection.txt` | **flagged, not executed** | hidden "ignore instructions / pay me" → `injection_suspected`, not an order |
+| `quote5_unknown_supplier.txt` | **REJECT** | supplier not whitelisted |
+
+That contrast — legit pays, tampered/injected does not, and the *badge* is what gates it —
+is the whole pitch.
+
+---
+
+## 4. Fastest proof (one command)
+
+With the tunnel + badge‑sim up and `.env` pointed at the L1, the e2e test deploys a fresh
+contract, runs the whole flow, and asserts the beneficiary was paid:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest bridge\tests\test_e2e.py -s
+# => [e2e] PAID: beneficiary +250000000 (demo USD)   +   journal intact
+```
+
+Local‑only variant (no EC2): run `anvil --port 8545` and leave `.env` on `:8545` / chainId 31337.
+
+---
+
+## 5. Verify integrity (judges love this)
+
+```powershell
+# the decision journal is append-only + hash-chained; this finds any tampering
+.\.venv\Scripts\python.exe -m lastword_bridge.verify_cli bridge\journal.jsonl
+```
+
+`witness/` anchors the Merkle root to Fuji + S3 for an external, independent timestamp.
+
+---
+
+## 6. Status — what is DONE vs what is LEFT for the Dell / engineer "I"
+
+### Done and verified
+- `proto` (26 tests), `contracts` (14 forge tests), `bridge` e2e, `agent` (7 + integration),
+  `witness`/journal (5) — all green.
+- Full payment flow green on **anvil** *and* the **live Avalanche L1 on EC2**
+  (propose → attest → approve, beneficiary paid, journal intact).
+- Block explorer live on EC2, indexing the real LASTWORD payment txs (tag `explorer-v1`).
+- Pushed to github.com/imadismad/lastword (tags: proto/contracts/bridge/agent/witness/infra/l1-live/explorer).
+
+### Left for the Dell / engineer "I"
+These are the remaining physical‑ and polish items; none block the software demo above.
+
+1. **Real nugget over USB (COM6).** The nugget enumerates as **COM6** (confirmed), and
+   `pyserial` is installed, but opening it right now fails with Windows error 31
+   ("device not functioning") — a **driver/state issue on the Dell**, not code.
+   To use the real badge instead of `badge-sim`:
+   - fix the COM6 driver (replug / reinstall the USB‑serial driver / check Device Manager),
+   - flash the badge firmware (engineer **N**'s hardware track — `badge-fw`, not in this repo),
+   - then run the bridge with `BRIDGE_TRANSPORT=serial:COM6:115200` and skip T2.
+2. **Mesh (Meshtastic) transport.** Code path exists (`transport.py: MeshTransport`,
+   `mesh:COM6`) but the **`meshtastic` Python lib is not installed** and no node is flashed.
+   To smoke‑test: `pip install meshtastic`, flash a node, then
+   `BRIDGE_TRANSPORT=mesh:COM6`. Not required for the core demo.
+3. **FR‑16 operator dashboard** (live view of proposals/journal) — optional, not built.
+4. **`attacks/` demo scripts** (scripted replay/tamper/duress attempts) — optional, not built;
+   quote3/4/5 already demonstrate the rejections manually.
+5. **WireGuard client on the Dell** — optional. The SSH tunnel (section 2) is the working
+   path; the WireGuard *server* is set up on EC2, but installing the Dell client needs one
+   admin‑elevated command (`wireguard /installtunnelservice infra\lastword-wg0.conf`).
+
+### Cost / teardown reminder
+The EC2 instance (`i-06b1af13ef6af465a`, us-east-1) is **running** (~a few $/day). Tear down
+when done: `python infra\provision_ec2.py --terminate`.
