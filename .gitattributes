@@ -1,0 +1,11 @@
+# Treat binaries as binary (no EOL conversion) so byte-offset formats like PDF
+# are not corrupted by autocrlf on Windows checkouts.
+*.pdf   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.pem   binary
+*.bin   binary
+*.gz    binary
