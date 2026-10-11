@@ -512,8 +512,18 @@ def mesh_status(refresh: int = 0):
         mode = requests.get(f"{BRIDGE_URL}/transport", timeout=3).json().get("mode")
     except Exception:
         mode = None
+    if mode is None:
+        # bridge down or starting up (it may be provisioning over this radio right now)
+        return {"configured": True, "reachable": False, "dev": dev,
+                "detail": "bridge unreachable — not touching the radio while it starts"}
     if mode == "real":
+        last = _MESH_CACHE["data"] or {}
+        relay = next((p for p in last.get("peers", []) if p["id"] == RELAY_ID), None)
+        if relay and relay.get("heard_s_ago") is not None:
+            relay = {**relay, "heard_s_ago": relay["heard_s_ago"] + int(time.time() - _MESH_CACHE["t"])}
+            relay["live"] = relay["heard_s_ago"] <= LIVE_WINDOW_S
         return {"configured": True, "reachable": False, "bridge_owns": True, "dev": dev,
+                "relay": relay,  # from the last probe before the bridge took the radio
                 "detail": f"the bridge owns {dev} (Real LoRa): frames cross the mesh on submit."}
     now = time.time()
     cached = _MESH_CACHE["data"] if _MESH_CACHE["data"] and _MESH_CACHE["data"].get("dev") == dev else None

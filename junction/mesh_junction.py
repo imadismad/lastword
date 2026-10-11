@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -33,6 +34,16 @@ sys.path.insert(0, os.path.join(ROOT, "proto", "src"))
 sys.path.insert(0, os.path.join(ROOT, "badge-sim"))
 
 PRIVATE_APP = 256
+
+
+def _is_reply(frame: bytes) -> bool:
+    """I3 replies (HELLO_OK, PROV_OK, RESPONSE, REFUSED) have the 0x80 bit set; replies
+    are broadcast, so the junction hears them too and must not feed them to the badge."""
+    from lastword_proto import unpack_message
+    try:
+        return bool(unpack_message(frame)[0] & 0x80)
+    except Exception:
+        return True  # not an I3 message at all
 
 
 # --------------------------------------------------------------- badge back-ends
@@ -69,27 +80,36 @@ class TcpBadge:
 
 
 class SerialBadge:
-    """Relay to a REAL badge chip over USB serial (badge-fw)."""
+    """Relay to a REAL badge chip over USB serial (badge-fw).
+
+    Reuses badge-fw/tools/badge_serial_test.py (validated on hardware): secure-serial
+    AUTH + 'lastword-bin' before every exchange, a 0x00 flush byte, and a frame reader
+    that skips the firmware's interleaved log lines. A REQUEST only answers after the
+    human approves on the keypad, so it gets a long timeout."""
     def __init__(self, port: str, baud: int = 115200):
         import serial
-        self._serial = serial
-        self.port, self.baud = port, baud
+        sys.path.insert(0, os.path.join(ROOT, "badge-fw", "tools"))
+        try:
+            import badge_serial_test as bst
+        except ImportError as e:
+            raise SystemExit(f"--badge serial needs badge-fw/tools (branch wanbl/badge-fw): {e}")
+        self._bst = bst
+        self._ser = serial.Serial(port, baud, timeout=0.5)
         self.label = f"serial:{port}@{baud} (hardware badge)"
 
     def handle(self, framed: bytes) -> bytes:
-        with self._serial.Serial(self.port, self.baud, timeout=15) as ser:
-            ser.write(framed)
-            ser.flush()
-            buf = bytearray()
-            deadline = time.time() + 15
-            while time.time() < deadline:
-                ch = ser.read(1)
-                if not ch:
-                    continue
-                buf += ch
-                if ch == b"\x00":
-                    break
-            return bytes(buf)
+        from lastword_proto import Command, unpack_message
+        cmd = unpack_message(framed)[0]
+        self._bst.enter_binary(self._ser)
+        self._ser.write(b"\x00" + framed)
+        self._ser.flush()
+        if cmd == Command.REQUEST:
+            print("[junction] REQUEST on the badge: review the screen, press Y, "
+                  "enter the PIN, press Y")
+            timeout = float(os.environ.get("JUNCTION_APPROVE_S", "30"))
+        else:
+            timeout = 15.0
+        return self._bst.read_cobs_frame(self._ser, timeout=timeout)
 
 
 def make_badge(spec: str, auto: bool):
@@ -128,6 +148,8 @@ def main():
     me = (info.get("user") or {}).get("id", "?")
     print(f"[junction] node {me} up; relaying PRIVATE_APP({PRIVATE_APP}) <-> badge. Ctrl-C to stop.")
 
+    badge_lock = threading.Lock()  # one exchange at a time on the badge
+
     def on_receive(packet, interface):
         dec = packet.get("decoded", {})
         pn = dec.get("portnum")
@@ -137,9 +159,17 @@ def main():
         if not payload:
             return
         src = packet.get("fromId") or packet.get("from")
+        if _is_reply(bytes(payload)):
+            return  # our own (or another junction's) broadcast reply, not a request
         print(f"[junction] <- {len(payload)}B frame from {src}; asking badge ...")
+        # the badge may wait minutes for a human: never block the radio's RX thread
+        threading.Thread(target=_serve, args=(bytes(payload), src, interface),
+                         daemon=True).start()
+
+    def _serve(frame: bytes, src, interface):
         try:
-            resp = badge.handle(bytes(payload))
+            with badge_lock:
+                resp = badge.handle(frame)
         except Exception as e:
             print(f"[junction] badge error: {e}")
             return

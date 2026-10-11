@@ -5,6 +5,7 @@ The transport only moves bytes; it never reads or forges the sealed I2 frame ins
 """
 from __future__ import annotations
 
+import os
 import socket
 import time
 
@@ -97,7 +98,10 @@ class MeshTransport:
         pub.subscribe(on_receive, "meshtastic.receive")
         try:
             msg = pack_message(command, data)
-            deadline = time.time() + self.timeout
+            # a REQUEST waits for a human on the badge (review screen, PIN, confirm)
+            wait = (float(os.environ.get("BRIDGE_MESH_APPROVE_S", "30"))
+                    if command == Command.REQUEST else self.timeout)
+            deadline = time.time() + wait
             iface.sendData(msg, destinationId=self.dest, portNum=self.PRIVATE_APP,
                            wantAck=True)
             while time.time() < deadline and reply["frame"] is None:
