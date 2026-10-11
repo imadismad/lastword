@@ -45,7 +45,10 @@ class MeshRadio:
         self.refresh_after = float(os.environ.get("LW_RADIO_REFRESH_S", "240"))
         self._subscribed = False
         self._station_got = threading.Event()   # set when the station reports a frame
-        self.resend_after = float(os.environ.get("LW_RADIO_RESEND_S", "20"))
+        self._station_refreshed = threading.Event()
+        self.resend_after = float(os.environ.get("LW_RADIO_RESEND_S", "30"))
+        self._reopening = False
+        self.on_no_receipt = lambda: None   # set by the app: ask the station to refresh
 
     # ------------------------------------------------------------------ lifecycle
     def open(self) -> None:
@@ -81,19 +84,33 @@ class MeshRadio:
 
     def reopen(self, reason: str) -> None:
         BUS.emit("radio.refresh", side=self.name, reason=reason)
+        self._reopening = True   # our own close fires connection.lost: ignore it
         try:
-            self.close()
-        except Exception:
-            pass
-        time.sleep(1.0)
-        self.open()
+            try:
+                self.close()
+            except Exception:
+                pass
+            last = None
+            for _ in range(15):          # Windows may hold the COM port for a moment
+                time.sleep(1.0)
+                try:
+                    self.open()
+                    return
+                except Exception as e:
+                    last = e
+            raise RadioError(f"could not reopen {self.port}: {last}")
+        finally:
+            self._reopening = False
 
     def note_station_rx(self) -> None:
         """Called when the badge station reports it received a frame (telemetry)."""
         self._station_got.set()
 
+    def note_station_refreshed(self) -> None:
+        self._station_refreshed.set()
+
     def _on_lost(self, interface=None):
-        if interface is not None and interface is not self.iface:
+        if self._reopening or (interface is not None and interface is not self.iface):
             return
         BUS.emit("radio.lost", side=self.name, port=self.port)
         threading.Thread(target=self._recover, daemon=True).start()
@@ -171,7 +188,12 @@ class MeshRadio:
                         and not w["event"].is_set()):
                     BUS.emit("radio.resend", side=self.name, cmd=CMD_NAMES.get(command), label=label,
                              reason=f"station heard nothing in {self.resend_after:.0f}s")
+                    # the deaf side is usually the long-open station link: ask it to
+                    # reopen (it polls every 4 s), refresh ours, then send again
+                    self._station_refreshed.clear()
+                    self.on_no_receipt()
                     self.reopen("no station receipt")
+                    self._station_refreshed.wait(20)
                     self._send(msg, command, at, label, timeout)
                 if not w["event"].wait(max(1.0, timeout - (time.time() - t0))):
                     BUS.emit("radio.timeout", side=self.name, cmd=CMD_NAMES.get(command),

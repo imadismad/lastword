@@ -88,7 +88,7 @@ def main() -> int:
         preset = int(iface.localNode.localConfig.lora.modem_preset)
     except Exception:
         pass
-    state = {"busy": None}
+    state = {"busy": None, "reopening": False}
 
     def serve(frame: bytes, src, meta):
         cmd = unpack_message(frame)[0]
@@ -120,7 +120,8 @@ def main() -> int:
     def on_rx(packet, interface):
         if interface is not link["iface"]:
             return
-        link["last"] = time.time()
+        if packet.get("fromId") != me:
+            link["last"] = time.time()   # only traffic from OTHER nodes proves we still hear
         dec = packet.get("decoded") or {}
         if dec.get("portnum") not in ("PRIVATE_APP", PRIVATE_APP) or not dec.get("payload"):
             return
@@ -150,14 +151,29 @@ def main() -> int:
         """A Meshtastic serial link can go silently deaf after a long idle period:
         reopen it when nothing has been heard for a while and no request is in flight."""
         print(f"[station] reopening nugget-3 link ({reason})")
-        report("station.refresh", reason=reason)
+        state["reopening"] = True
+        try:
+            _reopen_inner(reason)
+        finally:
+            state["reopening"] = False
+
+    def _reopen_inner(reason: str):
         try:
             link["iface"].close()
         except Exception:
             pass
-        time.sleep(1.0)
-        link["iface"] = meshtastic.serial_interface.SerialInterface(devPath=nugget)
+        last = None
+        for _ in range(15):   # Windows may hold the COM port for a moment
+            time.sleep(1.0)
+            try:
+                link["iface"] = meshtastic.serial_interface.SerialInterface(devPath=nugget)
+                break
+            except Exception as e:
+                last = e
+        else:
+            raise RuntimeError(f"could not reopen {nugget}: {last}")
         link["last"] = time.time()
+        report("station.refresh", reason=reason)   # tells the hub it may send again
 
     def watchdog():
         while True:
@@ -171,15 +187,21 @@ def main() -> int:
     threading.Thread(target=watchdog, daemon=True).start()
 
     def on_lost(interface=None):
-        if interface is link["iface"]:
+        if interface is link["iface"] and state["busy"] is None and not state["reopening"]:
             threading.Thread(target=lambda: reopen("connection lost"), daemon=True).start()
     pub.subscribe(on_lost, "meshtastic.connection.lost")
 
     def heartbeat():
         while True:
-            report("station.heartbeat", node=me, nugget=nugget,
-                   badge=("software P-256 (sim)" if software else badge_spec),
-                   hardware=not software, busy=state["busy"])
+            try:
+                r = requests.post(f"{HUB}/api/ingest", timeout=3, json={
+                    "type": "station.heartbeat", "node": me, "nugget": nugget,
+                    "badge": ("software P-256 (sim)" if software else badge_spec),
+                    "hardware": not software, "busy": state["busy"]}).json()
+                if r.get("refresh") and state["busy"] is None:
+                    reopen("hub saw no receipt")
+            except Exception:
+                pass
             time.sleep(4)
     threading.Thread(target=heartbeat, daemon=True).start()
 

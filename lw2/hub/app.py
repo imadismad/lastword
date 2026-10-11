@@ -30,7 +30,7 @@ from .pipeline import Core, EXPLORER  # noqa: E402
 app = FastAPI(title="LASTWORD 2.0 hub", version="2.0.0")
 CORE: Core | None = None
 BOOT_ERROR: str | None = None
-STATION: dict = {"last": None}
+STATION: dict = {"last": None, "refresh": False}
 DIST = os.path.join(ROOT, "lw2", "web", "dist")
 
 
@@ -46,6 +46,7 @@ async def _startup():
     try:
         CORE = Core(port)
         CORE.station_ready = lambda: bool(STATION["last"]) and time.time() - STATION["last"]["ts"] < 12
+        CORE.radio.on_no_receipt = lambda: STATION.update(refresh=True)
         await asyncio.to_thread(CORE.start)
     except Exception as e:
         BOOT_ERROR = f"{type(e).__name__}: {e}"
@@ -173,7 +174,11 @@ def ingest(body: IngestIn):
     t = data.pop("type")
     if t == "station.heartbeat":
         STATION["last"] = {**data, "ts": time.time()}
-        return {"ok": True}
+        # maintenance only: ask the station to reopen its LoRa link (it holds no key)
+        refresh, STATION["refresh"] = STATION["refresh"], False
+        return {"ok": True, "refresh": refresh}
+    if t == "station.refresh" and CORE:
+        CORE.radio.note_station_refreshed()
     if t == "station.rx" and CORE:
         CORE.radio.note_station_rx()
     BUS.emit(t, **data)
