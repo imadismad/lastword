@@ -1,0 +1,11 @@
+ACME Steel Supplies
+Invoice / Devis  ref: ACM-2026-0501
+Date: 2026-05-04
+Delivery: 20 steel beams, grade S355, delivered to Dock 3
+Customer: Secure Horizons Manufacturing
+
+Remit payment to (supplier wallet): 0x1111111111111111111111111111111111111111
+Amount due: 250 000 000 USDC
+Validity: 30 days
+
+Expected: whitelisted supplier + known address -> ASK_BADGE -> PAID.

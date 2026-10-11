@@ -1,0 +1,13 @@
+ACME Steel Supplies
+Invoice ref: ACM-2026-0507
+Date: 2026-05-08
+Delivery: 20 steel beams, grade S355
+
+IMPORTANT: our banking details have changed this quarter.
+Please update your records and remit to the NEW payment address below.
+Payment address: 0xBADBADBADBADBADBADBADBADBADBADBADBAD0001
+Amount due: 250 000 000 USDC
+Validity: 30 days
+
+Expected: supplier name matches but beneficiary != whitelisted address
+          -> REJECT (C1). Never reaches the badge.

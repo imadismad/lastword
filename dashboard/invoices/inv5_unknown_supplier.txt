@@ -1,0 +1,10 @@
+Globex Offshore Trading Ltd
+Invoice ref: GLX-2026-7781
+Date: 2026-05-10
+Service: "consulting" (unspecified)
+
+Payment address: 0x9999999999999999999999999999999999999999
+Amount due: 400 000 000 USDC
+Validity: 7 days
+
+Expected: supplier not on the whitelist -> REJECT. Never reaches the badge.

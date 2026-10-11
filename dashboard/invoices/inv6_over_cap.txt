@@ -1,0 +1,11 @@
+ACME Steel Supplies
+Invoice ref: ACM-2026-0512
+Date: 2026-05-11
+Delivery: 400 steel beams, grade S355 (bulk order)
+Payment address: 0x1111111111111111111111111111111111111111
+Amount due: 9 000 000 000 USDC
+Validity: 30 days
+
+Expected: whitelisted supplier + correct address, but amount exceeds the
+          per-transaction cap (1 000 000 000) -> REJECT (C3). The badge is
+          never asked to sign an over-limit payment.

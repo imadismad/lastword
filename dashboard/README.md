@@ -70,3 +70,28 @@ the dashboard, then drives the browser flow over HTTP:
 - address-swap quote → **REJECT (C1)**, never reaches the badge;
 - legit quote → **ASK_BADGE** → submit → propose/attest/approve → **PAID on-chain**
   (beneficiary +250000000), with explorer links for all three txs.
+
+## Invoice workflow (realistic fixtures, local OR Bedrock reader)
+
+`dashboard/invoices/` holds six demo invoices (plain text; the drop-zone also takes PDF/EML):
+
+| invoice | expected |
+|---------|----------|
+| `inv1_legit_acme.txt` | ASK_BADGE → **PAID** on the L1 |
+| `inv2_legit_port.txt` | second supplier (guard passes; only ACME is seeded on-chain) |
+| `inv3_address_swapped.txt` | **REJECT (C1)** — supplier name kept, payout address swapped |
+| `inv4_prompt_injection.txt` | injection **flagged (C12)**, real beneficiary kept, not executed |
+| `inv5_unknown_supplier.txt` | **REJECT** — supplier not whitelisted |
+| `inv6_over_cap.txt` | **REJECT (C3)** — amount over the per-tx cap |
+
+`dashboard/run_invoices.py` uploads each one through `/api/evaluate` exactly like the
+browser, asserts the verdict, and for the legit one submits → badge → **live L1 payment**:
+
+```powershell
+# tunnel to EC2 first (-L 8090), then:
+.\.venv\Scripts\python.exe dashboard\run_invoices.py http://127.0.0.1:8090 local
+.\.venv\Scripts\python.exe dashboard\run_invoices.py http://127.0.0.1:8090 bedrock
+```
+
+Both readers pass **6/6** against the live EC2 stack — including Claude correctly flagging
+the inv4 prompt injection and keeping the legitimate payment address.
