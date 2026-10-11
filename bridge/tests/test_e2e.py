@@ -28,7 +28,8 @@ from lastword_bridge.flow import Flow, Proposal, Status
 
 RPC = os.environ.get("LASTWORD_RPC_URL", "http://127.0.0.1:8545")
 BADGE_TCP = ("127.0.0.1", 8766)
-FORGE = os.path.join(os.path.expanduser("~"), ".foundry", "bin", "forge.exe")
+import shutil
+FORGE = shutil.which("forge") or os.path.expanduser("~/.foundry/bin/forge")
 FRAME_KEY = hashlib.sha256(b"lastword-frame-key-poc").digest()
 BADGE_ID = 40961
 
