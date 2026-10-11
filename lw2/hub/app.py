@@ -174,6 +174,8 @@ def ingest(body: IngestIn):
     if t == "station.heartbeat":
         STATION["last"] = {**data, "ts": time.time()}
         return {"ok": True}
+    if t == "station.rx" and CORE:
+        CORE.radio.note_station_rx()
     BUS.emit(t, **data)
     return {"ok": True}
 

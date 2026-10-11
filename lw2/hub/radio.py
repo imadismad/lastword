@@ -8,6 +8,7 @@ else on the channel (text, telemetry, other nodes) is logged as ignored and neve
 reaches the agent."""
 from __future__ import annotations
 
+import os
 import threading
 import time
 
@@ -37,13 +38,25 @@ class MeshRadio:
         self._waiter: dict | None = None
         self.stats = {"tx": 0, "rx": 0, "ignored": 0, "airtime_ms": 0.0}
         self.last_rx: dict | None = None
+        self.last_activity = time.time()     # any packet in or out on this link
+        # A Meshtastic serial link can go silently deaf after a long idle period (seen
+        # live: 28 min idle, then the REQUEST never reached the other node). Reopen it
+        # before transmitting if it has been quiet longer than this.
+        self.refresh_after = float(os.environ.get("LW_RADIO_REFRESH_S", "240"))
+        self._subscribed = False
+        self._station_got = threading.Event()   # set when the station reports a frame
+        self.resend_after = float(os.environ.get("LW_RADIO_RESEND_S", "20"))
 
     # ------------------------------------------------------------------ lifecycle
     def open(self) -> None:
         import meshtastic.serial_interface
         from pubsub import pub
-        pub.subscribe(self._on_rx, "meshtastic.receive")
+        if not self._subscribed:
+            pub.subscribe(self._on_rx, "meshtastic.receive")
+            pub.subscribe(self._on_lost, "meshtastic.connection.lost")
+            self._subscribed = True
         self.iface = meshtastic.serial_interface.SerialInterface(devPath=self.port)
+        self.last_activity = time.time()
         me = (self.iface.getMyNodeInfo() or {}).get("user", {})
         self.node_id = me.get("id")
         try:
@@ -66,10 +79,39 @@ class MeshRadio:
     def up(self) -> bool:
         return self.iface is not None
 
+    def reopen(self, reason: str) -> None:
+        BUS.emit("radio.refresh", side=self.name, reason=reason)
+        try:
+            self.close()
+        except Exception:
+            pass
+        time.sleep(1.0)
+        self.open()
+
+    def note_station_rx(self) -> None:
+        """Called when the badge station reports it received a frame (telemetry)."""
+        self._station_got.set()
+
+    def _on_lost(self, interface=None):
+        if interface is not None and interface is not self.iface:
+            return
+        BUS.emit("radio.lost", side=self.name, port=self.port)
+        threading.Thread(target=self._recover, daemon=True).start()
+
+    def _recover(self):
+        for _ in range(10):
+            try:
+                self.reopen("connection lost")
+                return
+            except Exception as e:
+                BUS.emit("radio.refresh_failed", side=self.name, detail=str(e)[:160])
+                time.sleep(5)
+
     # ------------------------------------------------------------------ receive path
     def _on_rx(self, packet, interface):
         if interface is not self.iface or packet.get("fromId") == self.node_id:
             return  # other interfaces, or our own node's local telemetry
+        self.last_activity = time.time()
         dec = packet.get("decoded") or {}
         port = dec.get("portnum")
         hop_start, hop_limit = packet.get("hopStart"), packet.get("hopLimit")
@@ -112,18 +154,26 @@ class MeshRadio:
             raise RadioError("gateway radio is not open")
         msg = pack_message(command, data)
         with self._xlock:
+            if time.time() - self.last_activity > self.refresh_after:
+                self.reopen(f"idle {time.time() - self.last_activity:.0f}s before {label or 'exchange'}")
             w = {"expected": {command | 0x80, 0x84}, "frame": None, "meta": None,
                  "event": threading.Event()}
             self._waiter = w
             try:
                 t0 = time.time()
                 at = airtime_ms(len(msg), self.preset)
-                self.iface.sendData(msg, destinationId="^all", portNum=PRIVATE_APP, wantAck=True)
-                self.stats["tx"] += 1
-                self.stats["airtime_ms"] += at
-                BUS.emit("radio.tx", side=self.name, cmd=CMD_NAMES.get(command, hex(command)),
-                         size=len(msg), airtime_ms=round(at), label=label, timeout_s=timeout)
-                if not w["event"].wait(timeout):
+                self._station_got.clear()
+                self._send(msg, command, at, label, timeout)
+                # If the station has not even received the frame after a few seconds, the
+                # link is deaf: reopen our side and send the very same frame once more
+                # (safe: the badge never saw it, so it is not a replay).
+                if (not self._station_got.wait(self.resend_after) and w["frame"] is None
+                        and not w["event"].is_set()):
+                    BUS.emit("radio.resend", side=self.name, cmd=CMD_NAMES.get(command), label=label,
+                             reason=f"station heard nothing in {self.resend_after:.0f}s")
+                    self.reopen("no station receipt")
+                    self._send(msg, command, at, label, timeout)
+                if not w["event"].wait(max(1.0, timeout - (time.time() - t0))):
                     BUS.emit("radio.timeout", side=self.name, cmd=CMD_NAMES.get(command),
                              label=label, waited_s=round(time.time() - t0, 1))
                     raise RadioError(f"no {CMD_NAMES.get(command, 'reply')} answer over LoRa "
@@ -137,6 +187,14 @@ class MeshRadio:
                 return rcmd, rdata
             finally:
                 self._waiter = None
+
+    def _send(self, msg: bytes, command: int, at: float, label: str, timeout: float) -> None:
+        self.iface.sendData(msg, destinationId="^all", portNum=PRIVATE_APP, wantAck=True)
+        self.last_activity = time.time()
+        self.stats["tx"] += 1
+        self.stats["airtime_ms"] += at
+        BUS.emit("radio.tx", side=self.name, cmd=CMD_NAMES.get(command, hex(command)),
+                 size=len(msg), airtime_ms=round(at), label=label, timeout_s=timeout)
 
     def status(self) -> dict:
         return {"up": self.up, "port": self.port, "node": self.node_id,

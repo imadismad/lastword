@@ -79,7 +79,9 @@ def main() -> int:
         print(f"[station] badge warm-up failed: {e}")
         report("badge.error", cmd="HELLO", detail=f"warm-up: {e}"[:200])
     print(f"[station] opening nugget-3 on {nugget} ...")
-    iface = meshtastic.serial_interface.SerialInterface(devPath=nugget)
+    link = {"iface": meshtastic.serial_interface.SerialInterface(devPath=nugget),
+            "last": time.time()}   # last packet heard on nugget-3 (any port)
+    iface = link["iface"]
     me = ((iface.getMyNodeInfo() or {}).get("user") or {}).get("id")
     preset = 0
     try:
@@ -109,15 +111,16 @@ def main() -> int:
         report("badge.answered", cmd=NAMES.get(rcmd, hex(rcmd)), size=len(resp),
                badge_ms=round((time.time() - t0) * 1000), to=name)
         # broadcast reply: DMs get PKI-encrypted and dropped (NO_CHANNEL)
-        iface.sendData(resp, destinationId="^all", portNum=PRIVATE_APP, wantAck=True)
+        link["iface"].sendData(resp, destinationId="^all", portNum=PRIVATE_APP, wantAck=True)
         report("station.tx", cmd=NAMES.get(rcmd, hex(rcmd)), size=len(resp),
                airtime_ms=round(airtime_ms(len(resp), preset)))
         print(f"[station] {name} -> {NAMES.get(rcmd, hex(rcmd))} ({len(resp)} B) in "
               f"{time.time() - t0:.1f}s")
 
     def on_rx(packet, interface):
-        if interface is not iface:
+        if interface is not link["iface"]:
             return
+        link["last"] = time.time()
         dec = packet.get("decoded") or {}
         if dec.get("portnum") not in ("PRIVATE_APP", PRIVATE_APP) or not dec.get("payload"):
             return
@@ -141,6 +144,37 @@ def main() -> int:
     pub.subscribe(on_rx, "meshtastic.receive")
     print(f"[station] node {me} up on {nugget}; relaying PRIVATE_APP <-> badge")
 
+    refresh_after = float(os.environ.get("LW_RADIO_REFRESH_S", "240"))
+
+    def reopen(reason: str):
+        """A Meshtastic serial link can go silently deaf after a long idle period:
+        reopen it when nothing has been heard for a while and no request is in flight."""
+        print(f"[station] reopening nugget-3 link ({reason})")
+        report("station.refresh", reason=reason)
+        try:
+            link["iface"].close()
+        except Exception:
+            pass
+        time.sleep(1.0)
+        link["iface"] = meshtastic.serial_interface.SerialInterface(devPath=nugget)
+        link["last"] = time.time()
+
+    def watchdog():
+        while True:
+            time.sleep(15)
+            if state["busy"] is None and time.time() - link["last"] > refresh_after:
+                try:
+                    reopen(f"idle {time.time() - link['last']:.0f}s")
+                except Exception as e:
+                    print(f"[station] reopen failed: {e}")
+                    link["last"] = time.time() - refresh_after + 20   # retry soon
+    threading.Thread(target=watchdog, daemon=True).start()
+
+    def on_lost(interface=None):
+        if interface is link["iface"]:
+            threading.Thread(target=lambda: reopen("connection lost"), daemon=True).start()
+    pub.subscribe(on_lost, "meshtastic.connection.lost")
+
     def heartbeat():
         while True:
             report("station.heartbeat", node=me, nugget=nugget,
@@ -155,7 +189,7 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\n[station] stopping")
     finally:
-        iface.close()
+        link["iface"].close()
     return 0
 
 
