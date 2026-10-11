@@ -95,6 +95,7 @@ class SerialBadge:
         self.port, self.baud = port, baud
         self.label = f"serial:{port}@{baud} (hardware badge)"
         self._ser = None
+        self._armed = False   # True once the byte interceptor is installed
         # frozen proto codec: validate reply frames and tolerate interleaved logs
         from lastword_proto import cobs_decode, crc16_ccitt
         self._cobs_decode = cobs_decode
@@ -104,6 +105,7 @@ class SerialBadge:
         if self._ser is None or not self._ser.is_open:
             self._ser = self._serial.Serial(self.port, self.baud, timeout=0.4)
             time.sleep(0.3)
+            self._armed = False  # a fresh port is back on the text console
 
     def _drain(self, settle=0.4):
         end = time.time() + settle
@@ -111,10 +113,33 @@ class SerialBadge:
             if self._ser.read(256):
                 end = time.time() + settle
 
-    def _enter_binary(self):
-        """AUTH + install the 'lastword-bin' byte interceptor. Idempotent-ish:
-        safe to call before each frame; the badge keeps its provisioned state."""
+    def _probe_binary(self) -> bool:
+        """Return True if the badge is ALREADY in binary mode (interceptor armed):
+        send a HELLO and see if a valid I3 reply comes back. The interceptor stays
+        armed ~120 s between sessions, so a fresh process can inherit it; probing
+        avoids sending AUTH text that an armed interceptor would swallow as binary."""
+        from lastword_proto import pack_message, Command
         s = self._ser
+        s.reset_input_buffer()
+        s.write(b"\x00" + pack_message(Command.HELLO))
+        s.flush()
+        try:
+            self._read_reply(timeout=8.0)
+            return True
+        except Exception:
+            return False
+
+    def _enter_binary(self):
+        """Ensure the badge is in the binary I3 channel.
+
+        Robust to any prior state: first PROBE (the interceptor may still be armed
+        from an earlier session; re-AUTHing then would be swallowed). Only if the
+        probe fails do we run AUTH + 'lastword-bin'. Bare-LF terminators throughout
+        (CRLF makes the badge execute on \\r and eat \\n as a stray binary byte)."""
+        s = self._ser
+        if self._probe_binary():
+            return  # already armed — good to go
+        # not armed: do the full bring-up
         s.reset_input_buffer()
         s.write(b"\x00\n")          # close any residual binary frame / partial line
         s.flush()
@@ -141,6 +166,10 @@ class SerialBadge:
                         break
             if b"Executing: lastword-bin" in seen and b"Unknown command" not in seen:
                 s.reset_input_buffer()
+                return
+            # Maybe it armed between probe and now, or an old interceptor is still
+            # up: re-probe before giving up / waiting out the idle timeout.
+            if self._probe_binary():
                 return
             time.sleep(3.2)         # wait out an armed interceptor's idle timeout
         raise RuntimeError("badge did not enter binary mode: " + repr(bytes(seen[-120:])))
@@ -186,15 +215,27 @@ class SerialBadge:
     def handle(self, framed: bytes) -> bytes:
         # `framed` is a complete I3 message from the bridge (PROVISION or REQUEST).
         # REQUEST waits for a human on the badge keypad, so allow a long timeout.
+        #
+        # The badge's byte interceptor, once installed by 'lastword-bin', stays armed
+        # (120 s idle) and keeps forwarding every serial byte straight to the proto
+        # engine. So we must enter binary mode EXACTLY ONCE per session and then send
+        # raw frames directly — re-sending 'AUTH'/'lastword-bin' while armed would be
+        # swallowed as binary and desync the link (the "b''" failure we saw). We keep
+        # the port open across frames and only (re)arm when not already armed.
         self._open()
         try:
-            self._enter_binary()
+            if not self._armed:
+                self._enter_binary()
+                self._armed = True
+            self._ser.reset_input_buffer()
             self._ser.write(b"\x00" + framed)   # leading 0x00 flushes residual state
             self._ser.flush()
             # generous: a DAF REQUEST needs the operator to read + PIN on the keypad
             return self._read_reply(timeout=float(os.environ.get("LW_BADGE_TIMEOUT", "120")))
         except Exception:
-            # drop the port so the next frame reopens cleanly
+            # lost sync / timeout: drop the port AND our armed belief so the next
+            # frame reopens and re-arms from a known state.
+            self._armed = False
             try:
                 self._ser.close()
             except Exception:
