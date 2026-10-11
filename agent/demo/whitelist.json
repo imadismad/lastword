@@ -3,12 +3,49 @@
     "beneficiary": "0x1111111111111111111111111111111111111111",
     "cap": 1000000000,
     "active": true,
-    "age_ok": true
+    "age_ok": true,
+    "note": "primary demo supplier - seeded on-chain, payable end-to-end"
   },
   "港湾ロジ Port Logistics": {
     "beneficiary": "0x2222222222222222222222222222222222222222",
     "cap": 500000000,
     "active": true,
-    "age_ok": true
+    "age_ok": true,
+    "note": "unicode name; guard passes (not seeded on-chain, so on-chain propose would C1-revert)"
+  },
+  "Rhine Valley Castings GmbH": {
+    "beneficiary": "0x3333333333333333333333333333333333333333",
+    "cap": 750000000,
+    "active": true,
+    "age_ok": true,
+    "note": "EU foundry supplier"
+  },
+  "Nordwind Fasteners AB": {
+    "beneficiary": "0x4444444444444444444444444444444444444444",
+    "cap": 300000000,
+    "active": true,
+    "age_ok": true,
+    "note": "small cap - good for an over-cap demo at ~400M"
+  },
+  "Meridian Freight Partners": {
+    "beneficiary": "0x5555555555555555555555555555555555555555",
+    "cap": 600000000,
+    "active": true,
+    "age_ok": true,
+    "note": "logistics"
+  },
+  "Atlas Precision Tools Inc": {
+    "beneficiary": "0x6666666666666666666666666666666666666666",
+    "cap": 1000000000,
+    "active": true,
+    "age_ok": true,
+    "note": "tooling"
+  },
+  "Sahel Minerals Trading": {
+    "beneficiary": "0x7777777777777777777777777777777777777777",
+    "cap": 450000000,
+    "active": false,
+    "age_ok": true,
+    "note": "SUSPENDED supplier (active=false) - any invoice must REJECT on C1"
   }
 }

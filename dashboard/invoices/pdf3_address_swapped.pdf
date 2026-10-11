@@ -1,0 +1,62 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 501 >>
+stream
+BT
+/F1 16 Tf
+1 0 0 1 56 760 Tm
+16 TL
+(ACME Steel Supplies) Tj
+/F1 11 Tf
+T*
+T*
+(INVOICE) Tj
+T*
+(Invoice ref: ACM-2026-0607    Date: 2026-06-08) Tj
+T*
+(Delivery: 20 steel beams, grade S355) Tj
+T*
+() Tj
+T*
+(IMPORTANT: our banking details changed this quarter.) Tj
+T*
+(Please remit to the NEW supplier wallet below:) Tj
+T*
+(0xBADBADBADBADBADBADBADBADBADBADBADBAD0001) Tj
+T*
+(Amount due: 250 000 000 USDC) Tj
+T*
+(Validity: 30 days) Tj
+T*
+() Tj
+T*
+([expected: REJECT \(C1\) - address != whitelist]) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000793 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+863
+%%EOF
