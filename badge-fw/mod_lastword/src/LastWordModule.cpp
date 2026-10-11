@@ -5,7 +5,10 @@
 #include "serial_cmd/ICommandRegistry.h"
 #include "cdc_core/ModuleRegistry.h"
 
+#include "cdc_log.h"
 #include "esp_timer.h"
+
+static const char* TAG = "LASTWORD";
 
 namespace cdc::mod_lastword {
 
@@ -67,9 +70,22 @@ void LastWordModule::setSlotRange(const core::IModule::SlotRange& range) {
 }
 
 bool LastWordModule::init() {
-    if (!g_backend.begin(slots_)) return false;
+    LOG_I(TAG, "init: registering module");
+    // Register with the registry FIRST so applySlotRequest() runs and setSlotRange()
+    // populates slots_ (the registry calls getSlotRequest()/setSlotRange() inside
+    // registerModule). Then begin() can see the assigned ECC range.
+    core::ModuleRegistry::instance().registerModule(this);
+
+    LOG_I(TAG, "init: slots hasEcc=%d ecc[%u..%u]", (int)slots_.hasEcc,
+          slots_.eccStart, slots_.eccEnd);
+    if (!g_backend.begin(slots_)) {
+        LOG_E(TAG, "init FAILED: backend.begin rejected slots (hasEcc=%d count=%d)",
+              (int)slots_.hasEcc, (int)(slots_.eccEnd - slots_.eccStart + 1));
+        return false;
+    }
     proto_.setBackend(&g_backend);
     state_ = core::ServiceState::INITIALIZED;
+    LOG_I(TAG, "init OK");
     return true;
 }
 
@@ -77,7 +93,13 @@ bool LastWordModule::start() {
     // Generate the role keys in-chip on first boot (vierge badge), or keep the
     // existing ones. The gateway public key is installed later via PROVISION or a
     // dedicated serial command (see fork patch); until then REQUESTs are refused.
-    if (!g_backend.ensureRoleKeys()) return false;
+    if (!g_backend.ensureRoleKeys()) {
+        LOG_E(TAG, "start FAILED: ensureRoleKeys() could not provision ECC slots %u..%u",
+              slots_.eccStart, slots_.eccEnd);
+        return false;
+    }
+    LOG_I(TAG, "start: role keys ready in ECC slots %u..%u (hw=%d)",
+          slots_.eccStart, slots_.eccEnd, (int)g_backend.isHardwareBacked());
 
     // Register the console command that flips the serial line into binary mode.
     cdc::serial::Command cmd{};
@@ -114,7 +136,11 @@ uint8_t LastWordModule::getMenuItems(core::ModuleMenuItem* /*items*/, uint8_t /*
 } // namespace cdc::mod_lastword
 
 extern "C" void mod_lastword_register() {
-    // Mirrors how other modules self-register with the ModuleRegistry.
-    cdc::core::ModuleRegistry::instance().registerModule(
-        &cdc::mod_lastword::LastWordModule::instance());
+    // Per cdc-badge-os module contract (dev/module-development): the entry point
+    // does NOT init directly. It registers a DEFERRED initializer that the registry
+    // runs later (after NVS, I18n, TropicStorage are ready) via runAllInitializers().
+    // init() itself calls registerModule(this).
+    cdc::core::ModuleRegistry::instance().registerInitializer([]() {
+        cdc::mod_lastword::LastWordModule::instance().init();
+    });
 }

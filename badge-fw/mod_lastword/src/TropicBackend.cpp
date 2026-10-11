@@ -8,6 +8,7 @@
 // polished e-paper ConfirmView + PinEntryView is a follow-up (see badge-fw/README).
 #include "serial_cmd/Console.h"
 #include "cdc_core/PinManager.h"
+#include "cdc_log.h"
 
 #include <mbedtls/ecp.h>
 #include <mbedtls/ecdsa.h>
@@ -80,7 +81,10 @@ bool TropicBackend::ensureRoleKeys() {
         swFallback_ = true;
         return true;
     }
-    if (!se_->sessionStart()) { hwBacked_ = false; swFallback_ = true; return ensureRoleKeys(); }
+    if (!se_->sessionStart()) {
+        LOG_E("LASTWORD", "ensureRoleKeys: sessionStart failed -> software fallback");
+        hwBacked_ = false; swFallback_ = true; return ensureRoleKeys();
+    }
     bool ok = true;
     for (int i = 0; i < 3; ++i) {
         uint8_t slot = static_cast<uint8_t>(slots_.eccStart + i);
@@ -88,14 +92,28 @@ bool TropicBackend::ensureRoleKeys() {
             // vierge badge expected: refuse to clobber an existing key.
             uint8_t pub[64];
             EccCurve c;
-            if (se_->eccGetPublicKey(slot, pub, &c) != SeResult::OK) { ok = false; break; }
-            // slot already holds our key from a previous boot -> fine, keep it.
+            SeResult rr = se_->eccGetPublicKey(slot, pub, &c);
+            if (rr != SeResult::OK) {
+                LOG_E("LASTWORD", "ensureRoleKeys: slot %u used but read failed (SeResult=%d)",
+                      slot, (int)rr);
+                ok = false; break;
+            }
+            LOG_I("LASTWORD", "ensureRoleKeys: slot %u already holds a key, keeping", slot);
             continue;
         }
-        if (se_->eccGenerate(slot, EccCurve::P256) != SeResult::OK) { ok = false; break; }
+        SeResult rg = se_->eccGenerate(slot, EccCurve::P256);
+        if (rg != SeResult::OK) {
+            LOG_E("LASTWORD", "ensureRoleKeys: eccGenerate(slot %u) failed (SeResult=%d)",
+                  slot, (int)rg);
+            ok = false; break;
+        }
+        LOG_I("LASTWORD", "ensureRoleKeys: generated P-256 key in slot %u", slot);
     }
     se_->sessionEnd();
-    if (!ok) { hwBacked_ = false; swFallback_ = true; return ensureRoleKeys(); }
+    if (!ok) {
+        LOG_E("LASTWORD", "ensureRoleKeys: hardware provisioning failed -> software fallback");
+        hwBacked_ = false; swFallback_ = true; return ensureRoleKeys();
+    }
     hwBacked_ = true;
     return true;
 }
