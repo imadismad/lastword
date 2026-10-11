@@ -39,41 +39,45 @@ git submodule update --init --recursive badge-fw/cdc-badge-os
 ## Wiring mod_lastword into cdc-badge-os (the fork patch)
 
 `mod_lastword` lives outside the submodule, so building it in needs four small,
-reviewable edits inside `badge-fw/cdc-badge-os/`. Keep them on a branch of the
-submodule (or as a `patches/lastword.patch`) so upstream pulls stay clean.
+reviewable edits inside `badge-fw/cdc-badge-os/`. They are captured as a git patch
+so upstream pulls stay clean — never commit them into the submodule.
 
-1. **Register the component.** In the top-level `CMakeLists.txt`, add our dir:
-   ```cmake
-   set(EXTRA_COMPONENT_DIRS ${EXTRA_COMPONENT_DIRS} ${CMAKE_SOURCE_DIR}/../mod_lastword)
-   ```
+```
+badge-fw/patches/
+  lastword.patch   the 4-file diff (CMakeLists.txt, main/CMakeLists.txt,
+                   main/module_defaults.h, main/tropic_slot_map.h)
+  apply.sh         apply / re-check / --revert, idempotent
+```
 
-2. **Enable the module.** In `main/CMakeLists.txt`, add `mod_lastword` to the
-   `MODULES` list, and in `main/module_defaults.h` add
-   `X("mod_lastword", true)`.
+Apply it to the submodule working tree before building:
 
-3. **Reserve ECC slots** (badge is vierge, so we can carve them from FIDO2). In
-   `main/tropic_slot_map.h`:
-   ```c
-   #define MODULE_ID_MOD_LASTWORD 10        // new, never-reused id
+```
+badge-fw/patches/apply.sh            # apply (safe to re-run)
+badge-fw/patches/apply.sh --revert   # undo, leaving the submodule clean
+```
 
-   // shrink FIDO2 by 3 slots: 9..27 instead of 9..30
-   #define ECC_SLOT_MOD_FIDO2_START 9
-   #define ECC_SLOT_MOD_FIDO2_END   27
-   #define ECC_SLOT_MOD_LASTWORD_START 28   // stock=28, DAF=29, duress=30
-   #define ECC_SLOT_MOD_LASTWORD_END   30
-   ```
-   and add a line to `TROPIC_ECC_SLOT_MAP`:
-   ```c
-   X("mod_lastword", MODULE_ID_MOD_LASTWORD, ECC_SLOT_MOD_LASTWORD_START, ECC_SLOT_MOD_LASTWORD_END)
-   ```
-   (RMEM map is unchanged — the module needs no R-Mem.)
+What the patch does:
 
-4. **Wire the binary channel.** `mod_lastword` reads binary COBS frames, not the
-   text console. In the USB-CDC RX path (`components/usb_badge/usb_cdc.cpp`), when
-   `mod_lastword` is active, hand raw received bytes to
-   `LastWordModule::instance().feedByte(b)` instead of the line editor. A one-byte
-   command prefix (e.g. route bytes to LASTWORD only after a `0x1E` "enter binary
-   mode" marker, exit on idle timeout) keeps the normal serial console usable.
+1. **Registers the component** — adds `set(EXTRA_COMPONENT_DIRS
+   ${CMAKE_SOURCE_DIR}/../mod_lastword)` in the top-level `CMakeLists.txt`
+   (before `project()`), so the firmware finds `mod_lastword`.
+2. **Enables the module** — adds `mod_lastword` to `main/CMakeLists.txt` `MODULES`
+   and `X("mod_lastword", true)` in `main/module_defaults.h`.
+3. **Reserves ECC slots** — in `main/tropic_slot_map.h`, a new
+   `MODULE_ID_MOD_LASTWORD 10`, FIDO2 shrunk to 9–27, LASTWORD given 28–30
+   (stock/DAF/duress), and the range added to `TROPIC_ECC_SLOT_MAP`. RMEM is
+   unchanged. Safe because the badge is vierge (no FIDO2 credential in 28–30).
+
+### Still to do by hand: the binary channel (not in the patch)
+
+`mod_lastword` reads binary COBS frames, not the text console, so one wiring step
+is left to the integrator because it depends on how you want the serial console to
+coexist. In the USB-CDC RX path (`components/usb_badge/usb_cdc.cpp`), when
+`mod_lastword` is active, hand raw received bytes to
+`LastWordModule::instance().feedByte(b)` instead of the line editor. Suggested: a
+one-byte "enter binary mode" marker (e.g. `0x1E`) routes subsequent bytes to
+LASTWORD, with an idle timeout back to the console. This is intentionally left out
+of `lastword.patch` so it can be reviewed against your exact `usb_cdc.cpp`.
 
 Two integration shims in `TropicBackend.cpp` are marked as adapted-in-the-fork and
 may need their signatures matched to your exact cdc-badge-os revision:
