@@ -448,7 +448,9 @@ def livedemo_topology():
 
 @app.get("/api/mesh/status")
 def mesh_status(dev: str | None = None, refresh: int = 0):
-    dev = (dev or MESH_DEV or "").strip()
+    # only ever open the port the operator opted in to (LW_MESH_DEV): a stale page asking
+    # for ?dev=COMx would otherwise grab the radio while the bridge needs it
+    dev = MESH_DEV.strip()
     if not dev:
         return {"configured": False,
                 "detail": "no radio configured — set LW_MESH_DEV=" + (_DELL_DEV if _DELL_DEV.startswith('COM') else 'COMx') + " (the Dell nugget "
