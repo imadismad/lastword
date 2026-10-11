@@ -100,6 +100,10 @@ class SerialBadge:
         self.port, self.baud = port, baud
         self._ser = None
         self._armed = False  # True once the byte interceptor is installed
+        self._last = 0.0     # last exchange with the badge
+        # the badge drops the interceptor after ~120 s idle (and AUTH after 5 min): past
+        # this, re-arm (probe-first) instead of trusting a stale "armed" belief
+        self._idle_rearm = float(os.environ.get("LW_BADGE_REARM_IDLE_S", "90"))
         self.label = f"serial:{port}@{baud} (hardware badge)"
 
     def handle(self, framed: bytes) -> bytes:
@@ -109,6 +113,8 @@ class SerialBadge:
             if self._ser is None or not self._ser.is_open:
                 self._ser = self._serial.Serial(self.port, self.baud, timeout=0.5)
                 self._armed = False  # a fresh port starts on the text console
+            if self._armed and time.time() - self._last > self._idle_rearm:
+                self._armed = False
             if not self._armed:
                 self._bst.enter_binary(self._ser)
                 self._armed = True
@@ -121,7 +127,9 @@ class SerialBadge:
                 timeout = float(os.environ.get("JUNCTION_APPROVE_S", "120"))
             else:
                 timeout = 15.0
-            return self._bst.read_cobs_frame(self._ser, timeout=timeout)
+            reply = self._bst.read_cobs_frame(self._ser, timeout=timeout)
+            self._last = time.time()
+            return reply
         except Exception:
             # lost sync / timeout: drop the port and the armed state so the next frame
             # reopens and re-arms from a known state

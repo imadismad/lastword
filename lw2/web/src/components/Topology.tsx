@@ -43,15 +43,15 @@ export function Topology({ live, st }: { live: Live; st: State | null }) {
             <span className="mono">{live.link.gateway.hops == null ? 'direct link' : live.link.gateway.hops === 0 ? 'direct · 0 hop' : `${live.link.gateway.hops} hop(s)`}</span>
           </div>
           <div className="relative my-3 h-10">
-            <div className="absolute inset-x-[4%] top-1/2 h-px -translate-y-1/2 bg-gradient-to-r from-air/10 via-air/60 to-air/10" />
-            <div className="absolute inset-x-[4%] top-1/2 h-px -translate-y-1/2 border-t border-dashed border-air/30" />
+            <div className="absolute inset-x-[4%] top-1/2 h-px -translate-y-1/2 bg-gradient-to-r from-brand/10 via-brand/60 to-brand/10" />
+            <div className="absolute inset-x-[4%] top-1/2 h-px -translate-y-1/2 border-t border-dashed border-brand/30" />
             {live.packets.map(p => (
               <div
                 key={p.key}
                 className={`absolute top-1/2 -translate-y-1/2 ${p.dir === 'out' ? 'packet-r' : 'packet-l'}`}
                 style={{ ['--dur' as any]: `${p.dur}s` }}
               >
-                <div className={`mono whitespace-nowrap rounded-md px-2 py-0.5 text-[10px] font-semibold shadow-lg ${p.dir === 'out' ? 'bg-air text-ink-950 shadow-air/40' : 'bg-violet text-ink-950 shadow-violet/40'}`}>
+                <div className={`mono whitespace-nowrap rounded-md px-2 py-0.5 text-[10px] font-semibold shadow-lg ${p.dir === 'out' ? 'bg-brand text-white shadow-brand/40' : 'bg-violet text-white shadow-violet/40'}`}>
                   {p.label} · {p.size}B
                 </div>
               </div>
@@ -143,15 +143,15 @@ function EPaper({ live }: { live: Live }) {
   const role = live.payment?.steps.daf?.state === 'active' ? 'DAF' : 'STOCK'
   const pct = left / a.timeout
   return (
-    <div className="mt-4 flex items-center gap-5 rounded-xl border border-wait/40 bg-wait/5 p-4">
+    <div className="mt-4 flex items-center gap-5 rounded-xl border border-brand/40 bg-brand/5 p-4">
       <svg width="64" height="64" viewBox="0 0 64 64" className="shrink-0">
-        <circle cx="32" cy="32" r="27" fill="none" stroke="#2a3a5a" strokeWidth="6" />
-        <circle cx="32" cy="32" r="27" fill="none" stroke="var(--color-wait)" strokeWidth="6" strokeLinecap="round"
+        <circle cx="32" cy="32" r="27" fill="none" stroke="var(--color-ink-700)" strokeWidth="6" />
+        <circle cx="32" cy="32" r="27" fill="none" stroke="var(--color-brand)" strokeWidth="6" strokeLinecap="round"
           strokeDasharray={`${2 * Math.PI * 27 * pct} 999`} transform="rotate(-90 32 32)" />
-        <text x="32" y="37" textAnchor="middle" className="mono" fill="#e6ebf5" fontSize="15" fontWeight="700">{left}</text>
+        <text x="32" y="37" textAnchor="middle" className="mono" fill="var(--color-ink-100)" fontSize="15" fontWeight="700">{left}</text>
       </svg>
       <div>
-        <div className="label text-wait">Human on the badge · role {role}</div>
+        <div className="label text-brand">Human on the badge · role {role}</div>
         <div className="mt-1 text-lg font-semibold">Read the e-paper, then press <Key>Y</Key> → PIN → <Key>Y</Key></div>
         <div className="text-xs text-ink-400">The PIN comes from the physical keypad, never from the network. The badge signs inside the TROPIC01.</div>
       </div>

@@ -29,7 +29,7 @@ export default function App() {
           <Pill ok={!!st?.badge?.provisioned} text={st?.badge?.provisioned ? 'badge ready' : 'badge provisioning…'} />
           {st?.badge?.provisioned && (
             <button onClick={() => post('/api/provision').catch(() => {})} disabled={running}
-              className="rounded-full border border-ink-700 px-3 py-1 text-ink-300 transition hover:border-air hover:text-air disabled:opacity-40">
+              className="rounded-full border border-ink-700 px-3 py-1 text-ink-300 transition hover:border-brand hover:text-brand disabled:opacity-40">
               re-provision
             </button>
           )}

@@ -56,16 +56,16 @@ export function Quote({ busy, onPay }: { busy: boolean; onPay: (p: Record<string
       <div className="mt-3 flex flex-wrap gap-1.5">
         {samples.map(s => (
           <button key={s.id} onClick={() => pick(s)}
-            className={`rounded-full border px-2.5 py-1 text-xs transition hover:border-air hover:text-air ${/Legit/.test(s.title) ? 'border-ink-600 text-ink-300' : 'border-bad/30 text-bad/90'}`}>
+            className={`rounded-full border px-2.5 py-1 text-xs transition hover:border-brand hover:text-brand ${/Legit/.test(s.title) ? 'border-ink-600 text-ink-300' : 'border-bad/30 text-bad/90'}`}>
             {s.title}
           </button>
         ))}
       </div>
       <textarea value={text} onChange={e => { setText(e.target.value); setEv(null) }}
         placeholder="Paste a quote, or pick a sample above…"
-        className="mono mt-3 h-40 w-full resize-none rounded-xl border border-ink-700 bg-ink-950/60 p-3 text-xs leading-relaxed text-ink-100 outline-none focus:border-air" />
+        className="mono mt-3 h-40 w-full resize-none rounded-xl border border-ink-700 bg-ink-950/60 p-3 text-xs leading-relaxed text-ink-100 outline-none focus:border-brand" />
       <button onClick={analyze} disabled={!text.trim() || loading}
-        className="mt-3 flex items-center justify-center gap-2 rounded-xl bg-ink-700 px-4 py-2.5 text-sm font-semibold transition hover:bg-ink-600 disabled:opacity-40">
+        className="mt-3 flex items-center justify-center gap-2 rounded-xl border border-ink-100 bg-ink-100 px-4 py-2.5 text-sm font-semibold text-ink-950 transition hover:bg-ink-300 disabled:opacity-40">
         <ScanSearch size={16} /> {loading ? 'Reading…' : 'Read with the isolated agent'}
       </button>
 
@@ -104,7 +104,7 @@ export function Quote({ busy, onPay }: { busy: boolean; onPay: (p: Record<string
           {ev.explanation && <p className="text-xs leading-relaxed text-ink-300">{ev.explanation}</p>}
           {ev.proposal ? (
             <button onClick={send} disabled={busy}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-ok px-4 py-3 text-sm font-bold text-ink-950 shadow-lg shadow-ok/20 transition hover:brightness-110 disabled:opacity-40">
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-brand px-4 py-3 text-sm font-bold text-white shadow-lg shadow-brand/30 transition hover:brightness-110 disabled:opacity-40">
               <Send size={16} /> {busy ? 'A payment is in flight…' : 'Send to the badge over LoRa'}
             </button>
           ) : (

@@ -63,14 +63,14 @@ export function Pipeline({ live, explorer }: { live: Live; explorer?: string }) 
 function StepRow({ i, def, st, explorer, last }: { i: number; def: (typeof STEPS)[number]; st?: Step; explorer?: string; last: boolean }) {
   const state = st?.state ?? 'idle'
   const icon = state === 'done' ? <CheckCircle2 size={18} className="text-ok" />
-    : state === 'active' ? <Loader2 size={18} className="animate-spin text-wait" />
+    : state === 'active' ? <Loader2 size={18} className="animate-spin text-brand" />
     : state === 'error' ? (def.key === 'rolecheck' ? <ShieldX size={18} className="text-bad" /> : <XCircle size={18} className="text-bad" />)
     : <span className="mono flex h-[18px] w-[18px] items-center justify-center rounded-full border border-ink-600 text-[10px] text-ink-400">{i + 1}</span>
   return (
     <li className="relative flex gap-3 pb-3">
       {!last && <span className={`absolute left-[8.5px] top-6 h-[calc(100%-18px)] w-px ${state === 'done' ? 'bg-ok/40' : 'bg-ink-700'}`} />}
       <span className="relative z-10 mt-0.5 bg-ink-900">{icon}</span>
-      <div className={`min-w-0 flex-1 rounded-lg px-2 py-1 ${state === 'active' ? 'bg-wait/5' : ''}`}>
+      <div className={`min-w-0 flex-1 rounded-lg px-2 py-1 ${state === 'active' ? 'bg-brand/5' : ''}`}>
         <div className="flex items-baseline justify-between gap-2">
           <span className={`text-sm font-semibold ${state === 'idle' ? 'text-ink-400' : ''}`}>{def.title}</span>
           <span className="mono shrink-0 text-[11px] text-ink-400">{st?.ms != null ? secs(st.ms) : def.who}</span>
@@ -78,7 +78,7 @@ function StepRow({ i, def, st, explorer, last }: { i: number; def: (typeof STEPS
         <div className="text-[11px] leading-snug text-ink-400">{st?.detail ?? def.what}</div>
         {st?.tx && (
           <a href={`${explorer ?? ''}/tx/${st.tx}`} target="_blank" rel="noreferrer"
-            className="mono mt-0.5 inline-flex items-center gap-1 text-[11px] text-air hover:underline">
+            className="mono mt-0.5 inline-flex items-center gap-1 text-[11px] text-brand hover:underline">
             {short(st.tx, 10, 6)} <ExternalLink size={11} />
           </a>
         )}
