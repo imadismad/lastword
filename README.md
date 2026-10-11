@@ -115,8 +115,20 @@ $env:BRIDGE_URL="http://127.0.0.1:8099"
 
 Drop an invoice (PDF/EML/TXT, e.g. `agent/demo/quote1_legit.txt`), watch the prepared
 transaction appear (extracted fields, verdict, C1–C14, risk score), then **Send to badge →
-pay on L1** and see propose/attest/approve light up with explorer links. On EC2 flip the
-reader to **Bedrock**. See `dashboard/README.md`.
+pay on L1** and see propose/attest/approve light up with explorer links. See `dashboard/README.md`.
+
+**Live on EC2 (with the real Bedrock reader):** the dashboard + bridge + badge-sim are
+deployed on EC2 next to the L1 and explorer (`infra/deploy_dashboard_ec2.sh`). Tunnel to it
+and open the UI:
+
+```powershell
+ssh -N -i infra\lastword-key.pem -L 8090:127.0.0.1:8090 -L 3000:127.0.0.1:3000 ubuntu@13.223.184.99
+# open http://127.0.0.1:8090   (flip reader -> Bedrock; model us.anthropic.claude-sonnet-4-20250514-v1:0)
+```
+
+Verified end-to-end on EC2: **Amazon Bedrock (Claude Sonnet 4) read the invoice → guard →
+badge → PAID on the live Avalanche L1**, three txs visible in the explorer. The pm2 stack
+there is `lw-api / lw-indexer / lw-frontend / lw-badge / lw-bridge / lw-dashboard`.
 
 ---
 
@@ -171,7 +183,8 @@ per-role pubkeys). A1/A2 need no chain. See `attacks/README.md`.
 - Mesh transport **smoke-tested on the real LoRa nugget** (COM6, Meshtastic node): our
   `MeshTransport` frames and transmits a real I3 message over LoRa.
 - **Agent operator dashboard** (`dashboard/`): invoice → prepared transaction → badge → L1
-  payment, driven from the browser; verified end-to-end.
+  payment, driven from the browser; verified end-to-end locally AND **deployed on EC2 with
+  the real Amazon Bedrock (Claude) reader**, paying on the live L1.
 - Pushed to github.com/imadismad/lastword (tags: proto/contracts/bridge/agent/witness/infra/l1-live/explorer/attacks).
 
 ### Left for the Dell / engineer "I"

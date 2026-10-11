@@ -49,6 +49,9 @@ cleaned.txt
 # WireGuard client config (contains client private key)
 infra/lastword-wg0.conf
 
+# Bedrock creds env pushed to EC2 (temporary STS secrets)
+infra/bedrock.env
+
 # Block explorer: cloned third-party repos (frontend + backend) carry their own
 # .git and node_modules; we vendor only the LASTWORD fixes in
 # infra/explorer-patches/. setup_explorer.sh re-clones + applies them.
