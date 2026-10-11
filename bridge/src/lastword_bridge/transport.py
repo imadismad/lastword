@@ -98,8 +98,9 @@ class MeshTransport:
         pub.subscribe(on_receive, "meshtastic.receive")
         try:
             msg = pack_message(command, data)
-            # a REQUEST waits for a human on the badge (review screen, PIN, confirm)
-            wait = (float(os.environ.get("BRIDGE_MESH_APPROVE_S", "30"))
+            # a REQUEST waits for a human on the badge (review screen, PIN, confirm):
+            # the junction gives the badge 120 s, plus slack for the radio round-trip
+            wait = (float(os.environ.get("BRIDGE_MESH_APPROVE_S", "135"))
                     if command == Command.REQUEST else self.timeout)
             deadline = time.time() + wait
             iface.sendData(msg, destinationId=self.dest, portNum=self.PRIVATE_APP,

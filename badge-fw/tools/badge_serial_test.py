@@ -124,6 +124,21 @@ def _drain(ser: serial.Serial, settle: float = 0.4):
             end = time.time() + settle  # keep draining while bytes flow
 
 
+def probe_binary(ser: serial.Serial, timeout: float = 8.0) -> bool:
+    """True if the badge is ALREADY in binary mode (interceptor armed): send a HELLO
+    and see whether a valid I3 reply comes back. The interceptor stays armed ~120 s
+    after a session, so a fresh process can inherit it; probing first avoids sending
+    AUTH text that an armed interceptor would swallow as binary (the 'got 8B' desync)."""
+    ser.reset_input_buffer()
+    ser.write(b"\x00" + pack_message(Command.HELLO))
+    ser.flush()
+    try:
+        read_cobs_frame(ser, timeout=timeout)
+        return True
+    except TimeoutError:
+        return False
+
+
 def enter_binary(ser: serial.Serial):
     """Put the console into a known-clean text state, then install the byte
     interceptor with the 'lastword-bin' command.
@@ -137,7 +152,10 @@ def enter_binary(ser: serial.Serial):
     # Secure serial is enabled on this build: EVERY command except PING/AUTH needs
     # a prior AUTH (confirmed by the badge replying "Not authenticated" to
     # lastword-bin, and by the cdc-badge-os serial-console docs). The session
-    # times out after 5 min idle, so authenticate at the start of every exchange.
+    # times out after 5 min idle, so authenticate at the start of every exchange —
+    # unless the interceptor is still armed, in which case AUTH must NOT be sent.
+    if probe_binary(ser):
+        return
     ser.reset_input_buffer()
     # 0x00 closes any residual binary frame; newline flushes a partial text line
     ser.write(b"\x00\n")
@@ -168,6 +186,9 @@ def enter_binary(ser: serial.Serial):
         if b"Executing: lastword-bin" in seen and b"Unknown command" not in seen:
             time.sleep(0.1)
             ser.reset_input_buffer()
+            return
+        # it may have armed in between, or an old interceptor is still up
+        if probe_binary(ser):
             return
         # dirty: wait out any armed interceptor idle-timeout (3 s) and retry
         time.sleep(3.2)

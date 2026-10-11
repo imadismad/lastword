@@ -741,7 +741,8 @@ async function liveSend() {
     error:      () => ldDot('approve','err'),
     expired:    () => ldDot('approve','err'),
   };
-  for (let i = 0; i < 80; i++) {
+  // two human approvals on the badge (up to ~2 min each) + on-chain txs
+  for (let i = 0; i < 240; i++) {
     await new Promise(r => setTimeout(r, 1500));
     let s;
     try { s = await api('/api/status/' + reqId); } catch { continue; }

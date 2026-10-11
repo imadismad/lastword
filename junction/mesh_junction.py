@@ -82,34 +82,56 @@ class TcpBadge:
 class SerialBadge:
     """Relay to a REAL badge chip over USB serial (badge-fw).
 
-    Reuses badge-fw/tools/badge_serial_test.py (validated on hardware): secure-serial
-    AUTH + 'lastword-bin' before every exchange, a 0x00 flush byte, and a frame reader
-    that skips the firmware's interleaved log lines. A REQUEST only answers after the
-    human approves on the keypad, so it gets a long timeout."""
+    Reuses badge-fw/tools/badge_serial_test.py (validated on hardware) for the console
+    bring-up: probe-first, then secure-serial AUTH + 'lastword-bin' only if the byte
+    interceptor is not already armed, and a frame reader that skips the firmware's
+    interleaved log lines. The port stays open across frames (PROVISION, then the STOCK
+    and DAF REQUESTs arrive as separate mesh packets): we enter binary mode once and
+    re-arm only after a failure. A REQUEST answers only after the human approves on the
+    keypad (Y -> PIN -> Y), so it gets a long timeout."""
     def __init__(self, port: str, baud: int = 115200):
         import serial
         sys.path.insert(0, os.path.join(ROOT, "badge-fw", "tools"))
         try:
             import badge_serial_test as bst
         except ImportError as e:
-            raise SystemExit(f"--badge serial needs badge-fw/tools (branch wanbl/badge-fw): {e}")
-        self._bst = bst
-        self._ser = serial.Serial(port, baud, timeout=0.5)
+            raise SystemExit(f"--badge serial needs badge-fw/tools/badge_serial_test.py: {e}")
+        self._serial, self._bst = serial, bst
+        self.port, self.baud = port, baud
+        self._ser = None
+        self._armed = False  # True once the byte interceptor is installed
         self.label = f"serial:{port}@{baud} (hardware badge)"
 
     def handle(self, framed: bytes) -> bytes:
         from lastword_proto import Command, unpack_message
         cmd = unpack_message(framed)[0]
-        self._bst.enter_binary(self._ser)
-        self._ser.write(b"\x00" + framed)
-        self._ser.flush()
-        if cmd == Command.REQUEST:
-            print("[junction] REQUEST on the badge: review the screen, press Y, "
-                  "enter the PIN, press Y")
-            timeout = float(os.environ.get("JUNCTION_APPROVE_S", "30"))
-        else:
-            timeout = 15.0
-        return self._bst.read_cobs_frame(self._ser, timeout=timeout)
+        try:
+            if self._ser is None or not self._ser.is_open:
+                self._ser = self._serial.Serial(self.port, self.baud, timeout=0.5)
+                self._armed = False  # a fresh port starts on the text console
+            if not self._armed:
+                self._bst.enter_binary(self._ser)
+                self._armed = True
+            self._ser.reset_input_buffer()
+            self._ser.write(b"\x00" + framed)  # leading 0x00 flushes residual state
+            self._ser.flush()
+            if cmd == Command.REQUEST:
+                print("[junction] REQUEST on the badge: review the screen, press Y, "
+                      "enter the PIN, press Y")
+                timeout = float(os.environ.get("JUNCTION_APPROVE_S", "120"))
+            else:
+                timeout = 15.0
+            return self._bst.read_cobs_frame(self._ser, timeout=timeout)
+        except Exception:
+            # lost sync / timeout: drop the port and the armed state so the next frame
+            # reopens and re-arms from a known state
+            self._armed = False
+            try:
+                self._ser.close()
+            except Exception:
+                pass
+            self._ser = None
+            raise
 
 
 def make_badge(spec: str, auto: bool):

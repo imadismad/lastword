@@ -41,8 +41,8 @@ n'a pas l'offset de fréquence, et les nuggets ne s'entendraient pas. La bonne U
 
 ## 3. Lancer la junction
 
-**D'abord avec le badge logiciel.** Ce mode marche tout de suite, car ses clés sont celles
-enregistrées sur le contrat :
+**Test radio avec le badge logiciel** (HELLO / PROVISION seulement : le contrat porte
+maintenant les clés de la vraie puce, donc ce badge ne peut pas payer) :
 
 ```powershell
 python infra/hp_nugget3.py --run
@@ -57,12 +57,13 @@ Live demo. La console de la junction doit afficher le PROVISION, puis les REQUES
 python infra/hp_nugget3.py --run --badge serial:COM7
 ```
 
-Attention : le contrat EC2 (`0xc5a5…f5c42d`) a enregistré les clés **du badge-sim**
-(`stockQx = c39fcbc8…` et `dafQx = cd410f2f…`). Les clés de la puce TROPIC01 sont
-différentes. Avec le vrai badge, la radio et la signature fonctionneront, mais `attest`
-et `approve` seront refusés on-chain (`BadSignature`) tant que l'admin n'aura pas
-enregistré les clés de la puce (`registerStockKey`, `registerDafKey` et
-`registerDuressKey`, avec les 3 clés publiques renvoyées par HELLO).
+Le contrat EC2 (`0xc5a5…f5c42d`) a été mis à jour avec les clés **de la puce TROPIC01**
+(STOCK `15129b0a…`, DAF `51b061f7…`). Le vrai badge signe donc on-chain ; en contrepartie,
+`--badge sim` ne passe plus l'étape attest.
+
+Quand la console affiche `REQUEST on the badge`, tu as **120 s** (`JUNCTION_APPROVE_S`)
+pour lire l'e-paper puis faire **Y → PIN `123456` → Y**. Il y a deux REQUEST par
+paiement : STOCK (attestation de livraison) puis DAF (approbation du paiement).
 
 ## Règles
 
