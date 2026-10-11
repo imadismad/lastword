@@ -59,11 +59,17 @@ public:
     static LastWordModule& instance();
 
     // --- Binary I3 channel ---------------------------------------------------
-    // The USB-CDC SerialCmd processor is a line/text dispatcher; LASTWORD frames
-    // are binary COBS. The fork wires the raw CDC RX bytes to feedByte() when the
-    // module is active (see badge-fw/README.md "Wiring the binary channel"). Each
-    // completed COBS frame (terminated by 0x00) is handed to the protocol engine
-    // and the response is written straight back to the CDC TX.
+    // LASTWORD frames are binary COBS, but the serial console is a text/line
+    // dispatcher. cdc-badge-os already supports this exact need: a registered
+    // console command can install a ByteInterceptor on the command registry, and
+    // while it is installed EVERY received serial byte is handed to our handler
+    // instead of being line-parsed (the same mechanism used for raw plugin
+    // uploads). We use it so the fork patch does NOT need to touch main.cpp.
+    //
+    // Flow: the host sends the text command "lastword-bin\n"; our command handler
+    // installs the interceptor; each byte then goes to feedByte(); a completed
+    // COBS frame produces a reply on the CDC TX; the interceptor removes itself
+    // on an idle timeout so a half-sent frame can never wedge the console.
     void feedByte(uint8_t b);
 
 private:

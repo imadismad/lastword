@@ -68,16 +68,26 @@ What the patch does:
    (stock/DAF/duress), and the range added to `TROPIC_ECC_SLOT_MAP`. RMEM is
    unchanged. Safe because the badge is vierge (no FIDO2 credential in 28–30).
 
-### Still to do by hand: the binary channel (not in the patch)
+### The binary channel (no main.cpp change needed)
 
-`mod_lastword` reads binary COBS frames, not the text console, so one wiring step
-is left to the integrator because it depends on how you want the serial console to
-coexist. In the USB-CDC RX path (`components/usb_badge/usb_cdc.cpp`), when
-`mod_lastword` is active, hand raw received bytes to
-`LastWordModule::instance().feedByte(b)` instead of the line editor. Suggested: a
-one-byte "enter binary mode" marker (e.g. `0x1E`) routes subsequent bytes to
-LASTWORD, with an idle timeout back to the console. This is intentionally left out
-of `lastword.patch` so it can be reviewed against your exact `usb_cdc.cpp`.
+`mod_lastword` reads binary COBS frames, not the text console. Rather than patch
+the main loop, it uses cdc-badge-os's own raw-stream mechanism — the command
+registry's **`ByteInterceptor`** (the same one used for raw plugin uploads). While
+an interceptor is installed, every received serial byte bypasses line parsing and
+goes straight to our handler.
+
+Flow (all in `mod_lastword`, nothing to wire by hand):
+1. On `start()`, the module registers a console command `lastword-bin`.
+2. The host sends the text line `lastword-bin\n`. The handler installs the byte
+   interceptor and the line goes silent (binary from here on).
+3. Each byte is fed to the protocol engine; a completed COBS frame (`0x00`) yields
+   a reply on the CDC TX.
+4. An idle timeout (3 s) removes the interceptor, so a half-sent frame can never
+   wedge the console; the text console then resumes normally.
+
+The bridge's `serial:` transport should therefore send `lastword-bin\n` once after
+opening the port, before the first `PROVISION`/`REQUEST`. (Add this one line to the
+bridge's serial-open path — a small bridge-side change, not a firmware patch.)
 
 Two integration shims in `TropicBackend.cpp` are marked as adapted-in-the-fork and
 may need their signatures matched to your exact cdc-badge-os revision:
