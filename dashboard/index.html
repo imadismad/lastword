@@ -272,7 +272,7 @@
             <div class="role">Nugget 2 — battery relay</div>
             <div class="sub">Isolated Meshtastic node on an external battery, no PC. Extends range and routes the I3 frames.</div>
           </div>
-          <div class="st"><span class="badge-pill" id="hwRelaySt">via peers</span></div>
+          <div class="st"><span class="badge-pill warn" id="hwRelaySt">not verified</span></div>
         </div>
         <div class="hoparrow"><span class="lab">mesh hop</span></div>
         <div class="node">
@@ -281,7 +281,7 @@
             <div class="role">HP — junction + badge</div>
             <div class="sub">mesh_junction.py hands each I3 frame to the badge (P-256) and replies over the mesh.</div>
           </div>
-          <div class="st"><span class="badge-pill" id="hwHpSt">via peers</span></div>
+          <div class="st"><span class="badge-pill warn" id="hwHpSt">not verified</span></div>
         </div>
       </div>
     </div>
@@ -531,6 +531,9 @@ function showView(which) {
 }
 
 let TXP = null;
+// Only set true after a real mesh round-trip (a frame crossed the radio AND the badge
+// signed it back). A peer appearing in the node DB is NOT proof of this.
+let MESH_PROVEN = false;
 function paintSwitch(mode, busy) {
   const sw = $('txpSwitch');
   sw.classList.toggle('sim', mode === 'simulated');
@@ -618,11 +621,26 @@ async function refreshMesh(force) {
     + row('device', m.dev || '')
     + row('region', (REGION[m.region] ?? m.region ?? '?'))
     + row('preset', (PRESET[m.modem_preset] ?? m.modem_preset ?? '?') + ' · hop ' + (m.hop_limit ?? '?'))
-    + row('peers heard', peers.length + (peers.length ? ' — ' + peers.map(p=>p.id).join(', ') : ' (power the relay + HP junction)'));
-  $('meshDetail').textContent = m.channel_url ? 'channel: ' + m.channel_url : '';
+    + row('nodes in db', peers.length + (peers.length ? ' — ' + peers.map(p=>p.id).join(', ') : ' (none)'));
+  $('meshDetail').textContent = (m.channel_url ? 'channel: ' + m.channel_url + '\n' : '')
+    + 'Nodes-in-db are every node this radio has EVER heard (stale entries included). It '
+    + 'does NOT confirm your relay or the HP junction are live — only a round-trip does.';
+
+  // The Dell radio is the ONLY thing we can confirm by reading it locally.
   setHw('hwDellSt','radio: up','ok');
-  setHw('hwRelaySt', peers.length >= 1 ? 'heard on mesh' : 'power on', peers.length >= 1 ? 'ok' : 'off');
-  setHw('hwHpSt', peers.length >= 2 ? 'heard on mesh' : 'start junction', peers.length >= 2 ? 'ok' : 'off');
+
+  // The relay and HP junction CANNOT be confirmed from a peer list:
+  //  - a Meshtastic node never announces "I am a relay";
+  //  - the HP junction is software that must answer an I3 frame with a badge signature.
+  // The only honest proof is a successful mesh round-trip (a submit that reaches attested/
+  // approved). Until that happens this session, keep them "not verified", not green.
+  if (MESH_PROVEN) {
+    setHw('hwRelaySt','path proven','ok');
+    setHw('hwHpSt','badge replied','ok');
+  } else {
+    setHw('hwRelaySt','not verified','warn');
+    setHw('hwHpSt','not verified','warn');
+  }
 }
 function row(k,v){ return `<div class="k">${k}</div><div class="v">${v ?? ''}</div>`; }
 function setHw(id,txt,cls){ const e=$(id); e.textContent=txt; e.className='badge-pill '+(cls||''); }
@@ -685,12 +703,17 @@ async function liveSend() {
     reqId = r.reqId;
   } catch (e) { $('liveFlowStatus').textContent = 'bridge error: ' + e.message; ldDot('propose','err'); return; }
 
+  // A frame that comes back signed proves the badge path end-to-end. If the transport is
+  // 'real' (mesh), that proof means the LoRa hop + relay + HP junction are genuinely live,
+  // so (and only so) we may light the relay/junction pills.
+  const onMesh = !!(TXP && TXP.mode === 'real');
+  const prove = () => { if (onMesh) { MESH_PROVEN = true; refreshMesh(); } };
   const STATE = {
     proposed:   () => { ldDot('propose','done'); ldDot('attest','active'); },
     sent_stock: () => { ldDot('propose','done'); ldDot('attest','active'); },
-    attested:   () => { ldDot('propose','done'); ldDot('attest','done'); ldDot('approve','active'); },
-    sent_daf:   () => { ldDot('propose','done'); ldDot('attest','done'); ldDot('approve','active'); },
-    approved:   () => { ['propose','attest','approve'].forEach(s=>ldDot(s,'done')); },
+    attested:   () => { ldDot('propose','done'); ldDot('attest','done'); ldDot('approve','active'); prove(); },
+    sent_daf:   () => { ldDot('propose','done'); ldDot('attest','done'); ldDot('approve','active'); prove(); },
+    approved:   () => { ['propose','attest','approve'].forEach(s=>ldDot(s,'done')); prove(); },
     refused:    () => ldDot('approve','err'),
     error:      () => ldDot('approve','err'),
     expired:    () => ldDot('approve','err'),
