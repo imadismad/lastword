@@ -333,6 +333,11 @@ def put_transport(body: dict):
 
 # --------------------------------------------------------- Live demo (hardware)
 _MESH_CACHE = {"t": 0.0, "data": None}
+# node_id -> last unix time we received an over-the-air packet from it. Persists across
+# polls so a beacon caught in one ~8s window keeps the node "recently heard" for a few
+# minutes (Meshtastic beacons are only every 1-3 min, longer than one poll window).
+_LIVE_SEEN: dict[str, float] = {}
+LIVE_WINDOW_S = 300  # consider a node "live" if heard within this many seconds
 
 
 def _read_mesh(dev: str) -> dict:
@@ -343,6 +348,19 @@ def _read_mesh(dev: str) -> dict:
     case the open fails and we report 'busy' rather than erroring the whole page.
     """
     import meshtastic.serial_interface
+    from pubsub import pub
+    import time as _t
+
+    # Listen for live packets while the node is open: any node that TRANSMITS during the
+    # window is proven on-air right now (unlike the node DB, which keeps stale entries).
+    live_ids: set[str] = set()
+
+    def _on_rx(packet, interface):
+        src = packet.get("fromId")
+        if src:
+            live_ids.add(src)
+
+    pub.subscribe(_on_rx, "meshtastic.receive")
     iface = meshtastic.serial_interface.SerialInterface(devPath=dev)
     try:
         ni = iface.getMyNodeInfo() or {}
@@ -361,14 +379,38 @@ def _read_mesh(dev: str) -> dict:
             out["channel_url"] = iface.localNode.getURL()
         except Exception:
             pass
+        # brief live-listen window to catch beacons from nodes on the shared channel
+        _t.sleep(float(os.environ.get("LW_MESH_LISTEN_S", "9")))
+        now = _t.time()
+        # record anything heard on-air this poll into the persistent recency map
+        for pid in live_ids:
+            _LIVE_SEEN[pid] = now
         peers = []
         for n in (iface.nodes or {}).values():
             u = n.get("user", {}) or {}
-            if u.get("id") and u.get("id") != out.get("node_id"):
-                peers.append({"id": u.get("id"), "name": u.get("longName")})
+            pid = u.get("id")
+            if pid and pid != out.get("node_id"):
+                seen = _LIVE_SEEN.get(pid)
+                recent = bool(seen and (now - seen) <= LIVE_WINDOW_S)
+                peers.append({
+                    "id": pid,
+                    "name": u.get("longName"),
+                    "live": recent,                       # heard on-air within LIVE_WINDOW_S
+                    "live_now": pid in live_ids,          # transmitted during THIS read
+                    "heard_s_ago": (int(now - seen) if seen else None),
+                    "snr": n.get("snr"),
+                    "last_heard": n.get("lastHeard"),
+                })
+        # sort live peers first, then by id
+        peers.sort(key=lambda p: (not p["live"], p["id"]))
         out["peers"] = peers
+        out["live_ids"] = sorted(live_ids)
         return out
     finally:
+        try:
+            pub.unsubscribe(_on_rx, "meshtastic.receive")
+        except Exception:
+            pass
         iface.close()
 
 
@@ -392,7 +434,7 @@ def mesh_status(dev: str | None = None, refresh: int = 0):
                 "detail": "no radio configured — set LW_MESH_DEV=COM8 (the Dell nugget "
                           "the bridge drives) to enable live mesh status"}
     now = time.time()
-    if not refresh and _MESH_CACHE["data"] and now - _MESH_CACHE["t"] < 20 \
+    if not refresh and _MESH_CACHE["data"] and now - _MESH_CACHE["t"] < 40 \
             and _MESH_CACHE["data"].get("dev") == dev:
         return {"configured": True, "cached": True, **_MESH_CACHE["data"]}
     try:

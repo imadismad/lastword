@@ -526,7 +526,7 @@ function showView(which) {
     loadTopology();
     loadTransport();
     refreshMesh();
-    if (!meshTimer) meshTimer = setInterval(refreshMesh, 25000);
+    if (!meshTimer) meshTimer = setInterval(refreshMesh, 45000);
   } else if (meshTimer) { clearInterval(meshTimer); meshTimer = null; }
 }
 
@@ -616,29 +616,40 @@ async function refreshMesh(force) {
     return;
   }
   const peers = m.peers || [];
+  const livePeers = peers.filter(p => p.live);
+  const fmtLive = p => p.id + (p.heard_s_ago != null ? ' (' + p.heard_s_ago + 's ago' + (p.snr!=null?', snr '+p.snr:'') + ')' : '');
+  const fmtPeer = p => p.id + (p.live ? ' ✓live' : ' (stale)');
   $('meshKv').innerHTML =
       row('node', (m.name || '?') + ' (' + (m.node_id || '?') + ')')
     + row('device', m.dev || '')
     + row('region', (REGION[m.region] ?? m.region ?? '?'))
     + row('preset', (PRESET[m.modem_preset] ?? m.modem_preset ?? '?') + ' · hop ' + (m.hop_limit ?? '?'))
-    + row('nodes in db', peers.length + (peers.length ? ' — ' + peers.map(p=>p.id).join(', ') : ' (none)'));
+    + row('heard on air', livePeers.length ? livePeers.map(fmtLive).join(', ') : 'none yet (beacons every ~1-3 min — give it a minute)')
+    + row('nodes in db', peers.length ? peers.map(fmtPeer).join(', ') : '(none)');
   $('meshDetail').textContent = (m.channel_url ? 'channel: ' + m.channel_url + '\n' : '')
-    + 'Nodes-in-db are every node this radio has EVER heard (stale entries included). It '
-    + 'does NOT confirm your relay or the HP junction are live — only a round-trip does.';
+    + '"heard on air" = this radio actually received an over-the-air packet from that node '
+    + 'in the last few minutes (real detection). "stale" = only an old node-DB entry. '
+    + 'Only a mesh round-trip proves the badge path end to end.';
 
-  // The Dell radio is the ONLY thing we can confirm by reading it locally.
+  // The Dell radio is confirmed by reading it locally.
   setHw('hwDellSt','radio: up','ok');
 
-  // The relay and HP junction CANNOT be confirmed from a peer list:
-  //  - a Meshtastic node never announces "I am a relay";
-  //  - the HP junction is software that must answer an I3 frame with a badge signature.
-  // The only honest proof is a successful mesh round-trip (a submit that reaches attested/
-  // approved). Until that happens this session, keep them "not verified", not green.
+  // Relay: a mesh node proves it is on-air + on the shared channel by TRANSMITTING a packet
+  // the Dell radio receives (p.live). That is real, verifiable detection — not the stale DB.
   if (MESH_PROVEN) {
     setHw('hwRelaySt','path proven','ok');
-    setHw('hwHpSt','badge replied','ok');
+  } else if (livePeers.length >= 1) {
+    setHw('hwRelaySt','heard on air ✓','ok');
   } else {
-    setHw('hwRelaySt','not verified','warn');
+    setHw('hwRelaySt','not heard yet','warn');
+  }
+
+  // HP junction is SOFTWARE that must answer an I3 frame with a badge signature. Hearing a
+  // radio beacon does NOT prove the junction is running, so it stays unverified until a
+  // real mesh round-trip (submit reaching attested/approved) proves it.
+  if (MESH_PROVEN) {
+    setHw('hwHpSt','badge replied ✓','ok');
+  } else {
     setHw('hwHpSt','not verified','warn');
   }
 }
