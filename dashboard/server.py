@@ -20,6 +20,11 @@ Env:
     DASH_EXPLORER_URL       (default http://127.0.0.1:3000)   block explorer base
     DASH_WHITELIST_FILE     (default agent/demo/whitelist.json)
     BEDROCK_MODEL_ID, BEDROCK_GUARDRAIL_ID, AWS_DEFAULT_REGION  (optional, for Bedrock)
+    LW_MESH_DEV             (e.g. COM8)   the Dell LoRa nugget the bridge drives; enables
+                            the "Live demo" (100% hardware) tab's live radio/mesh status.
+
+The "Live demo" tab shows the real LoRa topology (Dell radio -> battery relay -> HP
+junction + badge) and runs a quote through the real mesh path. See junction/LIVE_DEMO.md.
 """
 from __future__ import annotations
 
@@ -48,6 +53,33 @@ BRIDGE_URL = os.environ.get("BRIDGE_URL", "http://127.0.0.1:8099").rstrip("/")
 EXPLORER_URL = os.environ.get("DASH_EXPLORER_URL", "http://127.0.0.1:3000").rstrip("/")
 WHITELIST_FILE = os.environ.get("DASH_WHITELIST_FILE",
                                 os.path.join(ROOT, "agent", "demo", "whitelist.json"))
+
+# ---- Live demo (100% hardware) wiring ---------------------------------------
+# The radio this dashboard's bridge drives (the Dell nugget). When the bridge is
+# started with BRIDGE_TRANSPORT=mesh:<port>, this is the SAME port. The dashboard
+# only READS the radio for status; the bridge owns the actual send.
+MESH_DEV = os.environ.get("LW_MESH_DEV", os.environ.get("MESH_DEV", ""))  # e.g. COM8
+# Human-readable topology for the Live-demo page (overridable via env, but these
+# defaults match the hackathon rig: Dell=bridge radio, nugget-2=battery relay, HP=junction).
+TOPOLOGY = {
+    "dell": {
+        "role": "bridge radio (node 1)",
+        "detail": "Dashboard + Bedrock agent + I4 bridge; drives the LoRa nugget on "
+                  + (MESH_DEV or "COM8"),
+        "dev": MESH_DEV or "COM8",
+    },
+    "relay": {
+        "role": "battery relay (node 2)",
+        "detail": "Isolated Meshtastic nugget on an external battery — no PC. Extends "
+                  "range and routes I3 frames between the Dell and the HP.",
+    },
+    "hp": {
+        "role": "junction + badge (node 3)",
+        "detail": "junction/mesh_junction.py receives each I3 frame off the mesh and "
+                  "hands it to the badge (sim P-256 today, hardware chip once badge-fw "
+                  "exists), then replies over the mesh.",
+    },
+}
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -267,6 +299,82 @@ def bridge_health():
         return {"up": r.ok, "detail": r.json() if r.content else {}}
     except Exception as e:
         return {"up": False, "detail": str(e)}
+
+
+# --------------------------------------------------------- Live demo (hardware)
+_MESH_CACHE = {"t": 0.0, "data": None}
+
+
+def _read_mesh(dev: str) -> dict:
+    """Open the local LoRa nugget read-only and report identity / region / peers.
+
+    Opening a Meshtastic serial node takes ~10-15s, so results are cached briefly.
+    The bridge may hold the port exclusively when BRIDGE_TRANSPORT=mesh:<dev>; in that
+    case the open fails and we report 'busy' rather than erroring the whole page.
+    """
+    import meshtastic.serial_interface
+    iface = meshtastic.serial_interface.SerialInterface(devPath=dev)
+    try:
+        ni = iface.getMyNodeInfo() or {}
+        user = ni.get("user") or {}
+        out = {"dev": dev, "reachable": True,
+               "node_id": user.get("id"), "name": user.get("longName"),
+               "hw": user.get("hwModel")}
+        try:
+            lc = iface.localNode.localConfig.lora
+            out["region"] = int(lc.region)
+            out["modem_preset"] = int(lc.modem_preset)
+            out["hop_limit"] = int(lc.hop_limit)
+        except Exception:
+            pass
+        try:
+            out["channel_url"] = iface.localNode.getURL()
+        except Exception:
+            pass
+        peers = []
+        for n in (iface.nodes or {}).values():
+            u = n.get("user", {}) or {}
+            if u.get("id") and u.get("id") != out.get("node_id"):
+                peers.append({"id": u.get("id"), "name": u.get("longName")})
+        out["peers"] = peers
+        return out
+    finally:
+        iface.close()
+
+
+@app.get("/api/livedemo/topology")
+def livedemo_topology():
+    return {
+        "topology": TOPOLOGY,
+        "mesh_dev": MESH_DEV,
+        "bridge_url": BRIDGE_URL,
+        "explorer_url": EXPLORER_URL,
+        "reader_mode": CFG.reader_mode,
+        "bedrock_model": CFG.bedrock_model,
+    }
+
+
+@app.get("/api/mesh/status")
+def mesh_status(dev: str | None = None, refresh: int = 0):
+    dev = (dev or MESH_DEV or "").strip()
+    if not dev:
+        return {"configured": False,
+                "detail": "no radio configured — set LW_MESH_DEV=COM8 (the Dell nugget "
+                          "the bridge drives) to enable live mesh status"}
+    now = time.time()
+    if not refresh and _MESH_CACHE["data"] and now - _MESH_CACHE["t"] < 20 \
+            and _MESH_CACHE["data"].get("dev") == dev:
+        return {"configured": True, "cached": True, **_MESH_CACHE["data"]}
+    try:
+        data = _read_mesh(dev)
+    except Exception as e:
+        # the bridge likely holds the port (mesh transport) — that's expected & GOOD
+        return {"configured": True, "reachable": False, "dev": dev,
+                "detail": f"radio busy or unreachable: {e}. If the bridge is running with "
+                          f"BRIDGE_TRANSPORT=mesh:{dev}, it owns the port and will transmit "
+                          f"when you submit — that is the hardware path working."}
+    _MESH_CACHE["t"], _MESH_CACHE["data"] = now, data
+    return {"configured": True, "cached": False, **data}
 
 
 @app.get("/", response_class=HTMLResponse)

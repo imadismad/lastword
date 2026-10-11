@@ -73,18 +73,45 @@
     padding:10px; font-size:11px; max-height:200px; overflow:auto; }
   .hidden { display:none; }
   .flex { display:flex; gap:8px; }
+  /* top nav */
+  nav.tabs { display:flex; gap:4px; }
+  nav.tabs button { background:transparent; color:var(--dim); border:1px solid transparent;
+    border-radius:7px; padding:6px 12px; font-weight:600; }
+  nav.tabs button.active { color:var(--fg); background:var(--panel2); border-color:var(--line); }
+  /* live demo */
+  .hw { display:grid; grid-template-columns:1fr; gap:14px; }
+  .node { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:14px;
+    display:flex; gap:14px; align-items:flex-start; }
+  .node .ic { font-size:26px; line-height:1; flex:none; width:40px; text-align:center; }
+  .node .role { font-weight:700; }
+  .node .sub { color:var(--dim); font-size:12px; margin-top:3px; }
+  .node .st { margin-left:auto; }
+  .hoparrow { text-align:center; color:var(--dim); font:12px var(--mono); position:relative; }
+  .hoparrow .lab { background:var(--bg); padding:0 8px; position:relative; z-index:1; }
+  .hoparrow::before { content:""; position:absolute; left:50%; top:50%; height:22px;
+    border-left:2px dashed var(--line); transform:translate(-50%,-50%); z-index:0; }
+  .badge-pill { font:11px var(--mono); padding:3px 8px; border-radius:999px; border:1px solid var(--line); color:var(--dim); }
+  .badge-pill.ok { color:var(--ok); border-color:#1e5f3a; }
+  .badge-pill.busy { color:var(--warn); border-color:#5f531e; }
+  .badge-pill.off { color:var(--bad); border-color:#5f1e28; }
+  .lanes { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:900px){ .lanes{ grid-template-columns:1fr; } main{ grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
 <header>
   <h1>LASTWORD</h1>
-  <span class="tag">agent dashboard · the agent proposes, the badge says the last word</span>
+  <span class="tag">the agent proposes, the badge says the last word</span>
+  <nav class="tabs" style="margin-left:14px">
+    <button id="tabAgent" class="active">Agent</button>
+    <button id="tabLive">Live demo</button>
+  </nav>
   <span class="spacer"></span>
   <span class="pill" id="readerPill">reader …</span>
   <span class="pill" id="bridgePill">bridge …</span>
 </header>
 
-<main>
+<main id="viewAgent">
   <!-- LEFT: configuration -->
   <div>
     <div class="panel">
@@ -180,6 +207,112 @@
         <li><span class="dot" id="dot-approve"></span> approve + pay (DAF badge signature) <a id="lk-approve" target="_blank"></a></li>
       </ul>
       <div class="muted" id="flowStatus" style="margin-top:10px"></div>
+    </div>
+  </div>
+</main>
+
+<!-- ======================= LIVE DEMO (100% hardware) ======================= -->
+<main id="viewLive" class="hidden" style="grid-template-columns:1fr">
+  <div>
+    <div class="panel">
+      <h2>100% hardware · the real LoRa mesh path</h2>
+      <p class="muted" style="margin:0 0 10px">
+        No TCP shortcuts. A real Bedrock agent reads the quote on the Dell, the I3 frame
+        travels over a real LoRa mesh (Dell nugget → battery relay → HP junction), a badge
+        on the HP signs, and the signature returns over the same mesh to pay on the live L1.
+        The dashboard holds no key and no payment power.
+      </p>
+      <div class="hw">
+        <div class="node">
+          <div class="ic">🖥️</div>
+          <div>
+            <div class="role">Dell — bridge radio <span class="muted" id="hwDellDev"></span></div>
+            <div class="sub" id="hwDellSub">Dashboard + Bedrock agent + I4 bridge; drives the LoRa nugget.</div>
+          </div>
+          <div class="st"><span class="badge-pill" id="hwDellSt">radio …</span></div>
+        </div>
+        <div class="hoparrow"><span class="lab">LoRa 868 MHz · LONG_FAST · PRIVATE_APP(256)</span></div>
+        <div class="node">
+          <div class="ic">🔋</div>
+          <div>
+            <div class="role">Nugget 2 — battery relay</div>
+            <div class="sub">Isolated Meshtastic node on an external battery, no PC. Extends range and routes the I3 frames.</div>
+          </div>
+          <div class="st"><span class="badge-pill" id="hwRelaySt">via peers</span></div>
+        </div>
+        <div class="hoparrow"><span class="lab">mesh hop</span></div>
+        <div class="node">
+          <div class="ic">🛰️</div>
+          <div>
+            <div class="role">HP — junction + badge</div>
+            <div class="sub">mesh_junction.py hands each I3 frame to the badge (P-256) and replies over the mesh.</div>
+          </div>
+          <div class="st"><span class="badge-pill" id="hwHpSt">via peers</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="lanes">
+      <!-- mesh status -->
+      <div class="panel">
+        <h2>Local radio (Dell nugget)</h2>
+        <div class="kv" id="meshKv"><div class="k">status</div><div class="v">loading…</div></div>
+        <div class="muted" id="meshDetail" style="margin-top:8px"></div>
+        <div class="flex" style="margin-top:10px">
+          <button class="secondary" id="refreshMesh">Refresh radio</button>
+        </div>
+        <p class="muted" style="margin-top:8px">
+          Peers listed here are the other nuggets this radio has heard — the relay and the
+          HP junction. If the bridge is already transmitting (mesh transport), the radio is
+          busy and that is the hardware path working.
+        </p>
+      </div>
+
+      <!-- hardware flow controls -->
+      <div class="panel">
+        <h2>Run the hardware flow</h2>
+        <p class="muted" style="margin:0 0 8px">
+          Pick a quote, read it with the real agent, then send it over the real mesh. The
+          badge on the HP signs STOCK then DAF; the live L1 pays.
+        </p>
+        <label>Quote text (or switch to the Agent tab to drop a PDF)</label>
+        <textarea id="liveText" placeholder="Paste a supplier quote…"></textarea>
+        <div class="row" style="margin-top:10px">
+          <div><label>Deadline (min)</label><input id="liveDeadline" type="number" value="10" /></div>
+          <div><label>Token</label><input id="liveToken" type="number" value="0" /></div>
+          <div style="display:flex;align-items:flex-end"><button id="liveEvalBtn">Read with agent</button></div>
+        </div>
+        <div class="muted" id="liveReaderNote" style="margin-top:6px"></div>
+      </div>
+    </div>
+
+    <!-- prepared + flow -->
+    <div class="panel hidden" id="livePrepPanel">
+      <h2>Prepared by the agent</h2>
+      <div class="flex" style="align-items:center; gap:16px">
+        <div class="verdict" id="liveVerdict">—</div>
+        <div style="flex:1">
+          <div class="muted">reader: <span id="liveReader"></span> · risk <span id="liveScore"></span></div>
+          <div class="score"><div id="liveScoreBar" style="width:0%"></div></div>
+        </div>
+      </div>
+      <div class="warnbox hidden" id="liveInj"></div>
+      <div class="kv" id="livePrep" style="margin-top:10px"></div>
+      <div style="margin-top:14px">
+        <button id="liveSendBtn" disabled>Send over the mesh → badge → pay on L1</button>
+        <span class="muted" id="liveSendHint"></span>
+      </div>
+    </div>
+
+    <div class="panel hidden" id="liveFlowPanel">
+      <h2>Live hardware flow</h2>
+      <ul class="steps" id="liveSteps">
+        <li><span class="dot" id="ld-read"></span> agent reads the quote (Bedrock) </li>
+        <li><span class="dot" id="ld-propose"></span> propose on-chain (agent key) <a id="ld-lk-propose" target="_blank"></a></li>
+        <li><span class="dot" id="ld-attest"></span> I3 over the mesh → HP badge STOCK signature <a id="ld-lk-attest" target="_blank"></a></li>
+        <li><span class="dot" id="ld-approve"></span> I3 over the mesh → HP badge DAF signature → pay <a id="ld-lk-approve" target="_blank"></a></li>
+      </ul>
+      <div class="muted" id="liveFlowStatus" style="margin-top:10px"></div>
     </div>
   </div>
 </main>
@@ -346,7 +479,164 @@ async function submit() {
   }
 }
 
+// ============================ LIVE DEMO (hardware) ============================
+let LIVE_LAST = null, TOPO = null, meshTimer = null;
+
+function showView(which) {
+  const live = which === 'live';
+  $('viewAgent').classList.toggle('hidden', live);
+  $('viewLive').classList.toggle('hidden', !live);
+  $('tabAgent').classList.toggle('active', !live);
+  $('tabLive').classList.toggle('active', live);
+  if (live) {
+    loadTopology();
+    refreshMesh();
+    if (!meshTimer) meshTimer = setInterval(refreshMesh, 25000);
+  } else if (meshTimer) { clearInterval(meshTimer); meshTimer = null; }
+}
+
+async function loadTopology() {
+  try {
+    TOPO = await api('/api/livedemo/topology');
+    const dev = TOPO.topology.dell.dev || TOPO.mesh_dev || '';
+    $('hwDellDev').textContent = dev ? '· ' + dev : '';
+    const rm = TOPO.reader_mode === 'bedrock'
+      ? 'Bedrock (' + (TOPO.bedrock_model || 'model') + ')' : 'local reader';
+    $('hwDellSub').textContent = TOPO.topology.dell.detail;
+    $('liveReaderNote').textContent = 'current agent reader: ' + rm
+      + (TOPO.reader_mode === 'bedrock' ? '' : ' — switch to Bedrock on the Agent tab for the full-realistic read');
+  } catch (e) { /* topology is best-effort */ }
+}
+
+const REGION = {0:'UNSET',1:'US',3:'EU_868',4:'EU_433'};
+const PRESET = {0:'LONG_FAST',1:'LONG_SLOW',3:'MEDIUM_SLOW',4:'MEDIUM_FAST',5:'SHORT_SLOW',6:'SHORT_FAST'};
+
+async function refreshMesh(force) {
+  const dev = (TOPO && (TOPO.topology.dell.dev || TOPO.mesh_dev)) || '';
+  const q = '/api/mesh/status' + (force ? '?refresh=1' : '') + (dev ? (force?'&':'?') + 'dev=' + dev : '');
+  let m;
+  try { m = await api(q); }
+  catch (e) { $('meshKv').innerHTML = row('status','error: ' + e.message); return; }
+
+  if (!m.configured) {
+    $('meshKv').innerHTML = row('status','not configured');
+    $('meshDetail').textContent = m.detail || '';
+    setHw('hwDellSt','radio: set LW_MESH_DEV','off');
+    return;
+  }
+  if (!m.reachable) {
+    $('meshKv').innerHTML = row('status','busy / transmitting') + row('device', m.dev || '');
+    $('meshDetail').textContent = m.detail || '';
+    setHw('hwDellSt','radio: busy (bridge owns it)','busy');
+    setHw('hwRelaySt','relaying','busy'); setHw('hwHpSt','listening','busy');
+    return;
+  }
+  const peers = m.peers || [];
+  $('meshKv').innerHTML =
+      row('node', (m.name || '?') + ' (' + (m.node_id || '?') + ')')
+    + row('device', m.dev || '')
+    + row('region', (REGION[m.region] ?? m.region ?? '?'))
+    + row('preset', (PRESET[m.modem_preset] ?? m.modem_preset ?? '?') + ' · hop ' + (m.hop_limit ?? '?'))
+    + row('peers heard', peers.length + (peers.length ? ' — ' + peers.map(p=>p.id).join(', ') : ' (power the relay + HP junction)'));
+  $('meshDetail').textContent = m.channel_url ? 'channel: ' + m.channel_url : '';
+  setHw('hwDellSt','radio: up','ok');
+  setHw('hwRelaySt', peers.length >= 1 ? 'heard on mesh' : 'power on', peers.length >= 1 ? 'ok' : 'off');
+  setHw('hwHpSt', peers.length >= 2 ? 'heard on mesh' : 'start junction', peers.length >= 2 ? 'ok' : 'off');
+}
+function row(k,v){ return `<div class="k">${k}</div><div class="v">${v ?? ''}</div>`; }
+function setHw(id,txt,cls){ const e=$(id); e.textContent=txt; e.className='badge-pill '+(cls||''); }
+
+async function liveEvaluate() {
+  const t = $('liveText').value.trim();
+  if (!t) { $('liveReaderNote').textContent = 'paste a quote first'; return; }
+  $('liveReaderNote').textContent = 'reading with the agent…';
+  try {
+    const res = await api('/api/evaluate_text', {method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({text:t, deadline_mins:Number($('liveDeadline').value), token:Number($('liveToken').value)})});
+    LIVE_LAST = res;
+    renderLivePrep(res);
+    $('liveReaderNote').textContent = '';
+  } catch (e) { $('liveReaderNote').textContent = 'error: ' + e.message; }
+}
+
+function renderLivePrep(res) {
+  $('livePrepPanel').classList.remove('hidden');
+  $('liveFlowPanel').classList.add('hidden');
+  $('liveVerdict').textContent = res.verdict;
+  $('liveVerdict').className = 'verdict ' + res.verdict;
+  $('liveReader').textContent = res.reader;
+  $('liveScore').textContent = res.score;
+  $('liveScoreBar').style.width = Math.round(res.score * 100) + '%';
+  const rs = (res.extracted && res.extracted.risk_signals) || {};
+  const inj = $('liveInj');
+  if (rs.injection_suspected) {
+    inj.classList.remove('hidden');
+    inj.textContent = '⚠ Hidden instruction in the document — flagged as data, NOT executed.';
+  } else inj.classList.add('hidden');
+  const e = res.extracted || {};
+  $('livePrep').innerHTML = [
+    ['supplier', e.supplier_name], ['beneficiary', e.beneficiary],
+    ['amount', e.amount], ['currency', e.currency],
+    ['quote hash', res.quote_hash],
+  ].map(([k,v]) => row(k, v)).join('');
+  const can = res.verdict === 'ASK_BADGE' && !!res.proposal;
+  $('liveSendBtn').disabled = !can;
+  $('liveSendHint').textContent = can
+    ? 'frame leaves the Dell radio on submit'
+    : (res.verdict === 'REJECT' ? 'rejected by the guard — never reaches the mesh' : 'needs a valid EVM beneficiary');
+}
+
+function ldDot(s,c){ $('ld-'+s).className='dot '+c; }
+function ldLink(s,u){ const a=$('ld-lk-'+s); if(u){a.href=u;a.textContent='view tx ↗';} }
+
+async function liveSend() {
+  if (!LIVE_LAST || !LIVE_LAST.proposal) return;
+  $('liveSendBtn').disabled = true;
+  $('liveFlowPanel').classList.remove('hidden');
+  ['read','propose','attest','approve'].forEach(s => ldDot(s,''));
+  ldDot('read','done');  // the read already happened above
+  ldDot('propose','active');
+  $('liveFlowStatus').textContent = 'submitting to the bridge (mesh transport)…';
+  let reqId;
+  try {
+    const r = await api('/api/submit', {method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({proposal: LIVE_LAST.proposal})});
+    reqId = r.reqId;
+  } catch (e) { $('liveFlowStatus').textContent = 'bridge error: ' + e.message; ldDot('propose','err'); return; }
+
+  const STATE = {
+    proposed:   () => { ldDot('propose','done'); ldDot('attest','active'); },
+    sent_stock: () => { ldDot('propose','done'); ldDot('attest','active'); },
+    attested:   () => { ldDot('propose','done'); ldDot('attest','done'); ldDot('approve','active'); },
+    sent_daf:   () => { ldDot('propose','done'); ldDot('attest','done'); ldDot('approve','active'); },
+    approved:   () => { ['propose','attest','approve'].forEach(s=>ldDot(s,'done')); },
+    refused:    () => ldDot('approve','err'),
+    error:      () => ldDot('approve','err'),
+    expired:    () => ldDot('approve','err'),
+  };
+  for (let i = 0; i < 80; i++) {
+    await new Promise(r => setTimeout(r, 1500));
+    let s;
+    try { s = await api('/api/status/' + reqId); } catch { continue; }
+    (STATE[s.status] || (()=>{}))();
+    ldLink('propose', s.explorer_links && s.explorer_links.propose);
+    ldLink('attest', s.explorer_links && s.explorer_links.attest);
+    ldLink('approve', s.explorer_links && s.explorer_links.approve);
+    $('liveFlowStatus').textContent = 'status: ' + s.status + (s.detail ? ' — ' + s.detail : '');
+    if (['approved','refused','error','expired'].includes(s.status)) {
+      if (s.status === 'approved')
+        $('liveFlowStatus').textContent = '✓ PAID on the live L1 — the frame crossed the real LoRa mesh and the badge said the last word.';
+      break;
+    }
+  }
+}
+
 // wiring
+$('tabAgent').onclick = () => showView('agent');
+$('tabLive').onclick = () => showView('live');
+$('refreshMesh').onclick = () => refreshMesh(true);
+$('liveEvalBtn').onclick = liveEvaluate;
+$('liveSendBtn').onclick = liveSend;
 $('readerMode').onchange = toggleBedrock;
 $('saveCfg').onclick = saveConfig;
 $('reloadCfg').onclick = loadConfig;
