@@ -556,8 +556,10 @@ async function loadTransport() {
     ? 'live: frames go over the LoRa mesh to the HP badge.'
     : 'simulated: frames go to the local badge-sim over TCP (no radio).';
 }
+let SWITCHING = false;
 async function switchTransport(mode) {
-  if (!TXP || !TXP.available || mode === TXP.mode) return;
+  if (SWITCHING || !TXP || !TXP.available || mode === TXP.mode) return;
+  SWITCHING = true;
   paintSwitch(mode, true);
   $('txpMsg').textContent = (mode === 'real'
     ? 'switching to the real LoRa mesh and provisioning the HP badge… (~15 s)'
@@ -571,11 +573,15 @@ async function switchTransport(mode) {
     $('txpMsg').textContent = (r.mode === 'real'
       ? '✓ real: badge provisioned over the mesh. Frames now cross the radio.'
       : '✓ simulated: back on the local TCP badge-sim.');
+    // HELLO + PROVISION just made a round-trip through the relay to the HP badge
+    if (r.mode === 'real') MESH_PROVEN = true;
     refreshMesh(true);
   } catch (e) {
     // the bridge keeps the previous transport on failure — reflect that
     paintSwitch(TXP.mode, false);
     $('txpMsg').textContent = 'switch failed: ' + e.message + ' — staying on ' + TXP.mode + '.';
+  } finally {
+    SWITCHING = false;
   }
 }
 
@@ -596,8 +602,7 @@ const REGION = {0:'UNSET',1:'US',3:'EU_868',4:'EU_433'};
 const PRESET = {0:'LONG_FAST',1:'LONG_SLOW',3:'MEDIUM_SLOW',4:'MEDIUM_FAST',5:'SHORT_SLOW',6:'SHORT_FAST'};
 
 async function refreshMesh(force) {
-  const dev = (TOPO && (TOPO.topology.dell.dev || TOPO.mesh_dev)) || '';
-  const q = '/api/mesh/status' + (force ? '?refresh=1' : '') + (dev ? (force?'&':'?') + 'dev=' + dev : '');
+  const q = '/api/mesh/status' + (force ? '?refresh=1' : '');
   let m;
   try { m = await api(q); }
   catch (e) { $('meshKv').innerHTML = row('status','error: ' + e.message); return; }
@@ -605,14 +610,15 @@ async function refreshMesh(force) {
   if (!m.configured) {
     $('meshKv').innerHTML = row('status','not configured');
     $('meshDetail').textContent = m.detail || '';
-    setHw('hwDellSt','radio: set LW_MESH_DEV','off');
+    setHw('hwDellSt','radio: not detected','off');
     return;
   }
   if (!m.reachable) {
-    $('meshKv').innerHTML = row('status','busy / transmitting') + row('device', m.dev || '');
+    $('meshKv').innerHTML = row('status', m.bridge_owns ? 'owned by the bridge (Real LoRa)' : 'busy')
+      + row('device', m.dev || '');
     $('meshDetail').textContent = m.detail || '';
-    setHw('hwDellSt','radio: busy (bridge owns it)','busy');
-    setHw('hwRelaySt','relaying','busy'); setHw('hwHpSt','listening','busy');
+    setHw('hwDellSt', m.bridge_owns ? 'radio: bridge (real)' : 'radio: busy', m.bridge_owns ? 'ok' : 'busy');
+    if (MESH_PROVEN) { setHw('hwRelaySt','path proven','ok'); setHw('hwHpSt','badge replied ✓','ok'); }
     return;
   }
   const peers = m.peers || [];
@@ -634,24 +640,21 @@ async function refreshMesh(force) {
   // The Dell radio is confirmed by reading it locally.
   setHw('hwDellSt','radio: up','ok');
 
-  // Relay: a mesh node proves it is on-air + on the shared channel by TRANSMITTING a packet
-  // the Dell radio receives (p.live). That is real, verifiable detection — not the stale DB.
-  if (MESH_PROVEN) {
-    setHw('hwRelaySt','path proven','ok');
-  } else if (livePeers.length >= 1) {
-    setHw('hwRelaySt','heard on air ✓','ok');
-  } else {
-    setHw('hwRelaySt','not heard yet','warn');
-  }
+  // Each node is probed actively (traceroute) on every read, so "heard" means it answered
+  // over the air within the last few minutes — not a stale node-DB entry.
+  const relay = peers.find(p => p.id === m.relay_id);
+  const hp = peers.find(p => p.id === m.hp_id);
+  const heardTxt = p => 'heard ✓' + (p.heard_s_ago ? ' ' + p.heard_s_ago + 's ago' : '');
+  if (MESH_PROVEN) setHw('hwRelaySt','path proven','ok');
+  else if (relay && relay.live) setHw('hwRelaySt', heardTxt(relay), 'ok');
+  else setHw('hwRelaySt','not heard — powered on?','warn');
 
-  // HP junction is SOFTWARE that must answer an I3 frame with a badge signature. Hearing a
-  // radio beacon does NOT prove the junction is running, so it stays unverified until a
-  // real mesh round-trip (submit reaching attested/approved) proves it.
-  if (MESH_PROVEN) {
-    setHw('hwHpSt','badge replied ✓','ok');
-  } else {
-    setHw('hwHpSt','not verified','warn');
-  }
+  // HP: the nugget answering a traceroute proves the radio; only the badge answering the
+  // I3 HELLO proves the junction software is running.
+  if (MESH_PROVEN || m.hp_badge === 'answered') setHw('hwHpSt','badge answered ✓','ok');
+  else if (m.hp_badge === 'undecodable') setHw('hwHpSt','junction on old code — git pull','warn');
+  else if (hp && hp.live) setHw('hwHpSt','nugget up, junction silent','warn');
+  else setHw('hwHpSt','not heard','warn');
 }
 function row(k,v){ return `<div class="k">${k}</div><div class="v">${v ?? ''}</div>`; }
 function setHw(id,txt,cls){ const e=$(id); e.textContent=txt; e.className='badge-pill '+(cls||''); }

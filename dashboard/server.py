@@ -32,6 +32,7 @@ import hashlib
 import io
 import json
 import os
+import threading
 import time
 
 import requests
@@ -84,9 +85,7 @@ TOPOLOGY = {
         "role": "bridge radio (node 1)",
         "detail": "Dashboard + Bedrock agent + I4 bridge; drives the LoRa nugget on "
                   + _DELL_DEV,
-        # the UI polls this port for radio status: only when explicitly opted in via
-        # LW_MESH_DEV, otherwise it would fight the bridge for the same COM port
-        "dev": MESH_DEV,
+        "dev": _DELL_DEV,  # display only; status reads re-detect the port themselves
     },
     "relay": {
         "role": "battery relay (node 2)",
@@ -342,7 +341,10 @@ def put_transport(body: dict):
     badge are different instances), which can take ~15s for the mesh path.
     """
     try:
-        r = requests.put(f"{BRIDGE_URL}/transport", json=body, timeout=40)
+        # wait for any status read to release the Dell radio, and keep status reads off
+        # it while the bridge opens it (HELLO + PROVISION over the mesh, up to ~70 s)
+        with _RADIO_LOCK:
+            r = requests.put(f"{BRIDGE_URL}/transport", json=body, timeout=120)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"bridge unreachable: {e}")
     if not r.ok:
@@ -358,6 +360,19 @@ _MESH_CACHE = {"t": 0.0, "data": None}
 # minutes (Meshtastic beacons are only every 1-3 min, longer than one poll window).
 _LIVE_SEEN: dict[str, float] = {}
 LIVE_WINDOW_S = 300  # consider a node "live" if heard within this many seconds
+# One owner at a time for the Dell radio: status reads vs the bridge's transport switch.
+_RADIO_LOCK = threading.Lock()
+RELAY_ID = os.environ.get("LW_RELAY_ID", "!12b10d60")   # nugget-2, battery relay
+HP_ID = os.environ.get("LW_HP_ID", "!12b10d98")         # nugget-3, HP junction
+_BADGE_SEEN = {"t": 0.0, "state": None}                 # last HP badge probe result
+
+
+def _radio_dev() -> str:
+    """The Dell nugget to read: LW_MESH_DEV if set ('off' disables), else auto-detected
+    by USB serial on every call (COM numbers change on replug)."""
+    if MESH_DEV.strip().lower() in ("off", "none", "0"):
+        return ""
+    return MESH_DEV.strip() or _detect_dell_nugget()
 
 
 def _read_mesh(dev: str) -> dict:
@@ -374,11 +389,13 @@ def _read_mesh(dev: str) -> dict:
     # Listen for live packets while the node is open: any node that TRANSMITS during the
     # window is proven on-air right now (unlike the node DB, which keeps stale entries).
     live_ids: set[str] = set()
+    rx: list[dict] = []
 
     def _on_rx(packet, interface):
         src = packet.get("fromId")
         if src:
             live_ids.add(src)
+            rx.append(packet)
 
     pub.subscribe(_on_rx, "meshtastic.receive")
     iface = meshtastic.serial_interface.SerialInterface(devPath=dev)
@@ -399,8 +416,41 @@ def _read_mesh(dev: str) -> dict:
             out["channel_url"] = iface.localNode.getURL()
         except Exception:
             pass
-        # brief live-listen window to catch beacons from nodes on the shared channel
-        _t.sleep(float(os.environ.get("LW_MESH_LISTEN_S", "9")))
+        # Active probes (battery nodes beacon only every few minutes, so waiting is not
+        # enough): a traceroute to the relay and the HP nugget makes each one answer now,
+        # and an I3 HELLO broadcast makes the HP junction's badge answer if it is running.
+        from meshtastic.protobuf import mesh_pb2, portnums_pb2
+        from lastword_proto import Command
+        from lastword_proto.serial import pack_message, unpack_message
+        for nid in (RELAY_ID, HP_ID):
+            try:
+                iface.sendData(mesh_pb2.RouteDiscovery(), destinationId=nid,
+                               portNum=portnums_pb2.PortNum.TRACEROUTE_APP, wantResponse=True)
+            except Exception:
+                pass
+        try:
+            iface.sendData(pack_message(Command.HELLO), destinationId="^all", portNum=256)
+        except Exception:
+            pass
+        _t.sleep(float(os.environ.get("LW_MESH_LISTEN_S", "14")))
+        my_num = getattr(getattr(iface, "myInfo", None), "my_node_num", None)
+        badge = None
+        for pk in list(rx):
+            if pk.get("fromId") != HP_ID:
+                continue
+            dec = pk.get("decoded") or {}
+            if dec.get("portnum") == "PRIVATE_APP" and dec.get("payload"):
+                try:
+                    c, _ = unpack_message(dec["payload"])
+                    if c == Command.HELLO_OK:
+                        badge = "answered"
+                except Exception:
+                    pass
+            elif not dec and pk.get("encrypted") and pk.get("to") == my_num and badge is None:
+                # a direct reply we cannot decrypt = junction running pre-cc78eeb (DM reply)
+                badge = "undecodable"
+        if badge:
+            _BADGE_SEEN["t"], _BADGE_SEEN["state"] = _t.time(), badge
         now = _t.time()
         # record anything heard on-air this poll into the persistent recency map
         for pid in live_ids:
@@ -425,6 +475,9 @@ def _read_mesh(dev: str) -> dict:
         peers.sort(key=lambda p: (not p["live"], p["id"]))
         out["peers"] = peers
         out["live_ids"] = sorted(live_ids)
+        out["relay_id"], out["hp_id"] = RELAY_ID, HP_ID
+        fresh = _BADGE_SEEN["state"] and (now - _BADGE_SEEN["t"]) <= LIVE_WINDOW_S
+        out["hp_badge"] = _BADGE_SEEN["state"] if fresh else None
         return out
     finally:
         try:
@@ -447,26 +500,38 @@ def livedemo_topology():
 
 
 @app.get("/api/mesh/status")
-def mesh_status(dev: str | None = None, refresh: int = 0):
-    # only ever open the port the operator opted in to (LW_MESH_DEV): a stale page asking
-    # for ?dev=COMx would otherwise grab the radio while the bridge needs it
-    dev = MESH_DEV.strip()
+def mesh_status(refresh: int = 0):
+    dev = _radio_dev()
     if not dev:
         return {"configured": False,
-                "detail": "no radio configured — set LW_MESH_DEV=" + (_DELL_DEV if _DELL_DEV.startswith('COM') else 'COMx') + " (the Dell nugget "
-                          "the bridge drives) to enable live mesh status"}
+                "detail": "no Dell nugget detected on USB (expected serial "
+                          + os.environ.get("LW_DELL_NUGGET_SERIAL", "5A5B009671")
+                          + "), or LW_MESH_DEV=off"}
+    # in Real mode the bridge opens the radio for every frame: stay off it
+    try:
+        mode = requests.get(f"{BRIDGE_URL}/transport", timeout=3).json().get("mode")
+    except Exception:
+        mode = None
+    if mode == "real":
+        return {"configured": True, "reachable": False, "bridge_owns": True, "dev": dev,
+                "detail": f"the bridge owns {dev} (Real LoRa): frames cross the mesh on submit."}
     now = time.time()
-    if not refresh and _MESH_CACHE["data"] and now - _MESH_CACHE["t"] < 40 \
-            and _MESH_CACHE["data"].get("dev") == dev:
-        return {"configured": True, "cached": True, **_MESH_CACHE["data"]}
+    cached = _MESH_CACHE["data"] if _MESH_CACHE["data"] and _MESH_CACHE["data"].get("dev") == dev else None
+    if cached and not refresh and now - _MESH_CACHE["t"] < 40:
+        return {"configured": True, "cached": True, **cached}
+    if not _RADIO_LOCK.acquire(blocking=False):
+        # a read or a transport switch is in progress
+        if cached:
+            return {"configured": True, "cached": True, **cached}
+        return {"configured": True, "reachable": False, "dev": dev,
+                "detail": "radio in use (status read or transport switch in progress)"}
     try:
         data = _read_mesh(dev)
     except Exception as e:
-        # the bridge likely holds the port (mesh transport) — that's expected & GOOD
         return {"configured": True, "reachable": False, "dev": dev,
-                "detail": f"radio busy or unreachable: {e}. If the bridge is running with "
-                          f"BRIDGE_TRANSPORT=mesh:{dev}, it owns the port and will transmit "
-                          f"when you submit — that is the hardware path working."}
+                "detail": f"radio busy or unreachable: {e}"}
+    finally:
+        _RADIO_LOCK.release()
     _MESH_CACHE["t"], _MESH_CACHE["data"] = now, data
     return {"configured": True, "cached": False, **data}
 

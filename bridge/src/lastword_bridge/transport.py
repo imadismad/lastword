@@ -78,13 +78,21 @@ class MeshTransport:
         from pubsub import pub
         iface = meshtastic.serial_interface.SerialInterface(devPath=self.dev_port)
         reply = {"frame": None}
+        # Replies are broadcast on the shared channel, so other I3 traffic shows up too
+        # (requests, late replies to someone else's HELLO). Keep only the answer to THIS
+        # command: its 0x80 counterpart, or REFUSED.
+        expected = {command | 0x80, 0x84}
 
         def on_receive(packet, interface):
             dec = packet.get("decoded", {})
             if dec.get("portnum") == "PRIVATE_APP" or dec.get("portnum") == self.PRIVATE_APP:
                 payload = dec.get("payload")
-                if payload:
-                    reply["frame"] = payload
+                if payload and reply["frame"] is None:
+                    try:
+                        if unpack_message(bytes(payload))[0] in expected:
+                            reply["frame"] = payload
+                    except Exception:
+                        pass  # not an I3 message
 
         pub.subscribe(on_receive, "meshtastic.receive")
         try:
