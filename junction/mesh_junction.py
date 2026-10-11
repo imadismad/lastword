@@ -295,10 +295,13 @@ def main():
         except Exception as e:
             print(f"[junction] badge error: {e}")
             return
-        # reply to the sender on the same private port
+        # reply on the shared channel (broadcast), like the bridge sends. A direct message
+        # to `src` gets PKI-encrypted by recent firmware and is dropped with NO_CHANNEL
+        # when the two nuggets don't share each other's public key; the frame itself is
+        # already sealed (I2 AEAD + badge signature), so broadcasting it leaks nothing.
         try:
-            interface.sendData(resp, destinationId=src, portNum=PRIVATE_APP, wantAck=True)
-            print(f"[junction] -> {len(resp)}B response to {src}")
+            interface.sendData(resp, destinationId="^all", portNum=PRIVATE_APP, wantAck=True)
+            print(f"[junction] -> {len(resp)}B response (broadcast, for {src})")
         except Exception as e:
             print(f"[junction] send error: {e}")
 
