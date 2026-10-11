@@ -191,35 +191,46 @@ size_t BadgeProtocol::handleRequest(const uint8_t* frame, size_t len,
         return emitRefused(Refuse::BAD_GATEWAY_SIG, out, outCap);
     }
 
-    // 4. show role + fields, ask for PIN. The backend returns which key to use and
-    //    whether this was the duress PIN (same screen, identical outward behaviour).
-    Role requested = intent.role();
-    bool duress = false;
-    Role signRole = backend_->promptAndAuthorize(intent, requested,
-                                                 !backend_->isHardwareBacked(), &duress);
-    if (signRole == Role::NONE) return emitRefused(Refuse::USER_REFUSED, out, outCap);
-
-    // 5. sign the digest with the role key (TROPIC01 or software), normalize low-s.
-    uint8_t sig[64];
-    if (!backend_->signDigest(signRole, duress, digest, sig)) {
+    // 4. ASYNC: begin a human approval and return with no reply now. The badge
+    //    shows the fields on the e-paper and reads the PIN on the keypad via the
+    //    UI task; blocking here would freeze that task and deadlock. When the user
+    //    decides, the backend calls onApprovalDone(), which signs (on approve) and
+    //    emits the RESPONSE/REFUSED frame via the sink captured in feedByte().
+    if (pending_) {
+        // A prior approval is still on screen; refuse the new one rather than
+        // clobbering the pending state.
         return emitRefused(Refuse::OTHER, out, outCap);
     }
-    normalize_low_s(sig + 32); // s is the second half
+    std::memcpy(pendDigest_, digest, 32);
+    pendReqId_ = intent.reqId;
+    pendBadgeId_ = hdr.badgeId;
+    pending_ = true;
 
-    // 6. build the I2 response frame: reqId(4) || decision(1=approve) || badgeSig(64)
+    Role requested = intent.role();
+    if (!backend_->beginApproval(intent, requested, !backend_->isHardwareBacked(),
+                                 &BadgeProtocol::onApprovalDone, this)) {
+        pending_ = false;
+        return emitRefused(Refuse::OTHER, out, outCap);
+    }
+    return 0; // no immediate reply; the response is deferred to onApprovalDone
+}
+
+size_t BadgeProtocol::buildResponse(const uint8_t sig64[64], uint32_t reqId,
+                                    uint32_t badgeId, uint8_t* out, size_t outCap) {
+    // body = reqId(4) || decision(1=approve) || badgeSig(64)
     uint8_t body[69];
-    body[0] = static_cast<uint8_t>((intent.reqId >> 24) & 0xFF);
-    body[1] = static_cast<uint8_t>((intent.reqId >> 16) & 0xFF);
-    body[2] = static_cast<uint8_t>((intent.reqId >> 8) & 0xFF);
-    body[3] = static_cast<uint8_t>(intent.reqId & 0xFF);
+    body[0] = static_cast<uint8_t>((reqId >> 24) & 0xFF);
+    body[1] = static_cast<uint8_t>((reqId >> 16) & 0xFF);
+    body[2] = static_cast<uint8_t>((reqId >> 8) & 0xFF);
+    body[3] = static_cast<uint8_t>(reqId & 0xFF);
     body[4] = 0x01; // approve
-    std::memcpy(body + 5, sig, 64);
+    std::memcpy(body + 5, sig64, 64);
 
     ++respCounter_;
     FrameHeader rh;
     rh.version = 1;
     rh.type = TYPE_RESPONSE;
-    rh.badgeId = hdr.badgeId;
+    rh.badgeId = badgeId;
     rh.counter = respCounter_;
     rh.bodyLen = sizeof(body);
     uint8_t rhdr[HEADER_SIZE];
@@ -235,10 +246,39 @@ size_t BadgeProtocol::handleRequest(const uint8_t* frame, size_t len,
     size_t ctLen = 0;
     if (!crypto().aes256gcm_seal(rkey, rnonce, rhdr, HEADER_SIZE, body, sizeof(body),
                                  sealed + HEADER_SIZE, sizeof(sealed) - HEADER_SIZE, &ctLen)) {
-        return emitRefused(Refuse::OTHER, out, outCap);
+        return 0;
     }
     return pack_message(static_cast<uint8_t>(Cmd::RESPONSE), sealed, HEADER_SIZE + ctLen,
                         out, outCap);
+}
+
+void BadgeProtocol::onApprovalDone(void* engineCtx, IBadgeBackend::Outcome outcome,
+                                   Role role, bool duress) {
+    auto* self = static_cast<BadgeProtocol*>(engineCtx);
+    if (!self->pending_) return; // stale completion; ignore
+    self->pending_ = false;
+
+    uint8_t out[300];
+    size_t n = 0;
+
+    if (outcome == IBadgeBackend::Outcome::APPROVED) {
+        uint8_t sig[64];
+        if (self->backend_ && self->backend_->signDigest(role, duress, self->pendDigest_, sig)) {
+            normalize_low_s(sig + 32); // s is the second half
+            n = self->buildResponse(sig, self->pendReqId_, self->pendBadgeId_, out, sizeof(out));
+            if (n == 0) n = self->emitRefused(Refuse::OTHER, out, sizeof(out));
+        } else {
+            n = self->emitRefused(Refuse::OTHER, out, sizeof(out));
+        }
+    } else {
+        Refuse r = (outcome == IBadgeBackend::Outcome::EXPIRED) ? Refuse::EXPIRED
+                                                                : Refuse::USER_REFUSED;
+        n = self->emitRefused(r, out, sizeof(out));
+    }
+
+    if (n && self->deferredSink_) {
+        self->deferredSink_(self->deferredCtx_, out, n);
+    }
 }
 
 bool BadgeProtocol::feedByte(uint8_t b, ByteSink sink, void* ctx) {
@@ -254,8 +294,17 @@ bool BadgeProtocol::feedByte(uint8_t b, ByteSink sink, void* ctx) {
     rxLen_ = 0;
     if (!ok) return false;
 
+    // Capture the sink so a deferred async approval (REQUEST -> human PIN) can emit
+    // its RESPONSE/REFUSED on the same transport once the user decides.
+    deferredSink_ = sink;
+    deferredCtx_ = ctx;
+
     uint8_t resp[300];
     size_t n = handleMessage(static_cast<Cmd>(cmd), data, dataLen, resp, sizeof(resp));
+    // handleMessage returns 0 for a REQUEST that is now pending human approval
+    // (the reply will come later via onApprovalDone -> deferredSink_). For all
+    // other messages (HELLO/PROVISION, or an early rejection) it returns the frame
+    // to send right now.
     if (n && sink) sink(ctx, resp, n);
     return n != 0;
 }

@@ -39,15 +39,29 @@ public:
     bool gatewayPublicKey(uint8_t out64[64]) override;
     bool verifyP256(const uint8_t pub64[64], const uint8_t digest[32],
                     const uint8_t sig64[64]) override;
-    Role promptAndAuthorize(const Intent& intent, Role requested,
-                            bool softwareKey, bool* duress) override;
     bool signDigest(Role role, bool duress, const uint8_t digest[32],
                     uint8_t sig64[64]) override;
     bool isHardwareBacked() const override { return hwBacked_; }
+    bool beginApproval(const Intent& intent, Role requested, bool softwareKey,
+                       ApprovalDone done, void* engineCtx) override;
+
+    // Called by the UI-task view callbacks (InfoView Y/N, PinEntryView) to finish
+    // the current async approval. role/duress are resolved from the PIN entered.
+    void finishApproval(Outcome outcome, Role role, bool duress);
+
+    // Static self pointer so the C-style view callbacks (which carry no context)
+    // can reach the single live backend instance. Public because the view
+    // callbacks live in an anonymous namespace in the .cpp.
+    static TropicBackend* s_self;
 
 private:
     uint8_t slotFor(Role role) const; // stock/DAF/duress -> ECC slot index
 
+    // --- async approval state (one at a time; the badge shows one screen) ------
+    ApprovalDone pendDone_ = nullptr;   // engine completion to call when decided
+    void*        pendEngine_ = nullptr; // opaque engine ctx for pendDone_
+    Role         pendRequested_ = Role::NONE;
+    bool         pendActive_ = false;
     cdc::hal::ISecureElement* se_ = nullptr;
     core::IModule::SlotRange slots_ = {};
     uint8_t gatewayPub_[64] = {};

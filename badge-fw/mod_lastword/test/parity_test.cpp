@@ -75,6 +75,21 @@ static std::vector<uint8_t> unhex(std::string s) {
     return o;
 }
 
+// Capture whatever the engine emits via its ByteSink when we feed a full COBS
+// message. Returns the reply length copied into out (0 if none).
+struct SinkCap { uint8_t* out; size_t cap; size_t len; };
+static void sink_cb(void* ctx, const uint8_t* bytes, size_t n) {
+    auto* c = static_cast<SinkCap*>(ctx);
+    if (n <= c->cap) { std::memcpy(c->out, bytes, n); c->len = n; }
+}
+static size_t feed_and_capture(BadgeProtocol& eng, const uint8_t* msg, size_t msgLen,
+                               uint8_t* out, size_t outCap) {
+    SinkCap cap{out, outCap, 0};
+    for (size_t i = 0; i < msgLen; ++i)
+        eng.feedByte(msg[i], sink_cb, &cap);
+    return cap.len;
+}
+
 static int g_fail = 0;
 static void check(bool cond, const char* msg) {
     std::printf("  [%s] %s\n", cond ? "PASS" : "FAIL", msg);
@@ -98,8 +113,12 @@ public:
     bool verifyP256(const uint8_t pub[64], const uint8_t dg[32], const uint8_t sig[64]) override {
         return crypto().p256_verify(pub, dg, sig);
     }
-    Role promptAndAuthorize(const Intent&, Role requested, bool, bool* duress) override {
-        *duress = false; return requested; // auto-approve with the requested role
+    // Host test: approve synchronously (no human, no UI) by invoking the engine
+    // completion immediately with the requested role.
+    bool beginApproval(const Intent&, Role requested, bool,
+                       ApprovalDone done, void* engineCtx) override {
+        done(engineCtx, Outcome::APPROVED, requested, /*duress=*/false);
+        return true;
     }
     bool signDigest(Role role, bool, const uint8_t dg[32], uint8_t sig[64]) override {
         const uint8_t* d = (role == Role::STOCK) ? stockPriv
@@ -189,8 +208,14 @@ int main(int argc, char** argv) {
         eng.provision(frameKey.data(), chainId, contractAddr.data());
 
         uint8_t out[320];
-        size_t n = eng.handleMessage(Cmd::REQUEST, reqFrame.data(), reqFrame.size(),
-                                     out, sizeof(out));
+        // The REQUEST flow is now async: feedByte() captures the sink, and the
+        // (synchronous, auto-approve) HostBackend fires the completion during
+        // handleRequest, so the RESPONSE is emitted via the sink. Build the full
+        // COBS REQUEST message and feed it byte-by-byte.
+        uint8_t reqMsg[320];
+        size_t reqMsgLen = wire::pack_message((uint8_t)Cmd::REQUEST, reqFrame.data(),
+                                              reqFrame.size(), reqMsg, sizeof(reqMsg));
+        size_t n = feed_and_capture(eng, reqMsg, reqMsgLen, out, sizeof(out));
         check(n > 0, "REQUEST produced a reply frame");
 
         // decode the reply: expect RESPONSE (0x83) carrying a sealed I2 response.
@@ -244,7 +269,10 @@ int main(int argc, char** argv) {
         BadgeProtocol eng; eng.setBackend(&be);
         eng.provision(frameKey.data(), chainId, contractAddr.data());
         uint8_t out[320];
-        size_t n = eng.handleMessage(Cmd::REQUEST, badTag.data(), badTag.size(), out, sizeof(out));
+        uint8_t reqMsg[320];
+        size_t reqMsgLen = wire::pack_message((uint8_t)Cmd::REQUEST, badTag.data(),
+                                              badTag.size(), reqMsg, sizeof(reqMsg));
+        size_t n = feed_and_capture(eng, reqMsg, reqMsgLen, out, sizeof(out));
         uint8_t cmd = 0, data[300]; size_t dlen = 0;
         bool ok = wire::unpack_message(out, n, &cmd, data, sizeof(data), &dlen);
         check(ok && cmd == (uint8_t)Cmd::REFUSED, "tampered (bad-tag) frame is REFUSED");

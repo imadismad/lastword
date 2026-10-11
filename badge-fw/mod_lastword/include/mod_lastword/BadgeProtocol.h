@@ -81,28 +81,40 @@ public:
     virtual bool verifyP256(const uint8_t pub64[64], const uint8_t digest[32],
                             const uint8_t sig64[64]) = 0;
 
-    // Show the role banner + economic fields on the e-paper and block for the
-    // user's PIN on the keypad. Returns which key the entered PIN unlocks:
-    //   Role::STOCK / Role::DAF for the normal flow,
-    //   Role::DAF with *duress=true when the duress PIN was entered (same screen,
-    //     identical outward behaviour — the response frame must not reveal it),
-    //   Role::NONE if the user refused or the PIN was wrong.
-    // `softwareKey` makes the display show the permanent "SOFTWARE KEY" banner.
-    virtual Role promptAndAuthorize(const Intent& intent, Role requested,
-                                    bool softwareKey, bool* duress) = 0;
-
     // Sign a 32-byte digest with the role's key. On-device this calls
     // ISecureElement::ecdsaSignDigest on the role's TROPIC01 slot (no re-hash);
-    // the fallback uses a software P-256 key. The engine normalizes s to low-s
-    // afterwards, so the backend may return any valid s.
-    // `duress` selects the duress key for the DAF role.
-    // Returns false on any signing error. sig64 = r||s.
+    // the fallback uses a software P-256 key. `duress` selects the duress key for
+    // the DAF role. Returns false on any signing error. sig64 = r||s (the engine
+    // normalizes s to low-s afterwards, so any valid s is fine).
     virtual bool signDigest(Role role, bool duress, const uint8_t digest[32],
                             uint8_t sig64[64]) = 0;
 
-    // True when signDigest/rolePublicKey are backed by the TROPIC01 (hardware),
-    // false when the software fallback is active (controls the e-paper banner).
+    // True when signing/pubkeys are backed by the TROPIC01 (hardware), false when
+    // the software fallback is active (controls the e-paper "SOFTWARE KEY" banner).
     virtual bool isHardwareBacked() const = 0;
+
+    // --- asynchronous human approval ----------------------------------------
+    // The badge must NOT block the main loop while the DAF reads the e-paper and
+    // types a PIN on the keypad (the keypad is read by the same main-loop UI tick,
+    // so blocking here would deadlock — see badge-fw/README). Instead the engine
+    // asks the backend to BEGIN an approval and returns immediately; later, when
+    // the user approves/denies on the device, the backend invokes `done` exactly
+    // once with the outcome. `done` carries an opaque token so the engine can
+    // match the completion back to the pending request and emit the frame.
+    //
+    //   outcome: APPROVED  -> engine signs `digest` with `role`/`duress`, seals and
+    //                          emits the RESPONSE frame via the stored sink;
+    //            DENIED/EXPIRED/ERROR -> engine emits a REFUSED frame.
+    enum class Outcome : uint8_t { APPROVED, DENIED, EXPIRED, ERROR };
+    using ApprovalDone = void (*)(void* engineCtx, Outcome outcome, Role role, bool duress);
+
+    // Show the role banner + economic fields on the e-paper, push a PIN entry,
+    // and return immediately. When the human decides, call done(engineCtx, ...).
+    // `softwareKey` shows the permanent "SOFTWARE KEY" banner.
+    // Returns false if the approval could not even be started (e.g. a prompt is
+    // already in progress), in which case the engine emits REFUSED now.
+    virtual bool beginApproval(const Intent& intent, Role requested, bool softwareKey,
+                               ApprovalDone done, void* engineCtx) = 0;
 };
 
 class BadgeProtocol {
@@ -134,8 +146,21 @@ public:
     void computeDigest(const uint8_t intent79[79], uint8_t out32[32]) const;
 
 private:
+    // handleRequest starts an async approval and returns 0 (no immediate reply):
+    // the RESPONSE/REFUSED frame is emitted later via the stored sink when the
+    // human decides. It writes an immediate frame into `out` only for early
+    // rejections (bad frame / not provisioned / gateway sig) that need no human.
     size_t handleRequest(const uint8_t* frame, size_t len, uint8_t* out, size_t outCap);
     size_t emitRefused(Refuse reason, uint8_t* out, size_t outCap);
+
+    // Builds the sealed RESPONSE frame (approve) for a signed digest. Returns the
+    // COBS message length in `out`, or 0 on error.
+    size_t buildResponse(const uint8_t sig64[64], uint32_t reqId, uint32_t badgeId,
+                         uint8_t* out, size_t outCap);
+
+    // Trampoline the backend calls when the human decides (ApprovalDone).
+    static void onApprovalDone(void* engineCtx, IBadgeBackend::Outcome outcome,
+                               Role role, bool duress);
 
     IBadgeBackend* backend_ = nullptr;
 
@@ -144,6 +169,15 @@ private:
     uint64_t chainId_ = 0;
     uint8_t  contractAddr_[20] = {};
     uint32_t respCounter_ = 1000; // response frame counter (anti-replay, like the sim)
+
+    // Pending async approval. Only one at a time (the badge shows one screen).
+    bool     pending_ = false;
+    uint8_t  pendDigest_[32] = {};
+    uint32_t pendReqId_ = 0;
+    uint32_t pendBadgeId_ = 0;
+    // The sink to emit the deferred RESPONSE/REFUSED on (captured from feedByte).
+    ByteSink deferredSink_ = nullptr;
+    void*    deferredCtx_ = nullptr;
 
     // COBS reassembly buffer for feedByte().
     static constexpr size_t RX_MAX = 300;

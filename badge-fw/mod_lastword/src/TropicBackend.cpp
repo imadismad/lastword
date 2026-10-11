@@ -3,12 +3,12 @@
 #include "mod_lastword/crypto.h"
 #include "cdc_hal/ISecureElement.h"
 
-// Firmware services. For the first bring-up the approval prompt uses the serial
-// Console (fields shown, PIN read) with the real PinManager duress logic. A
-// polished e-paper ConfirmView + PinEntryView is a follow-up (see badge-fw/README).
-#include "serial_cmd/Console.h"
+// Firmware services for the async e-paper + keypad approval flow.
 #include "cdc_core/PinManager.h"
 #include "cdc_log.h"
+#include "cdc_ui/ViewStack.h"
+#include "cdc_views/InfoView.h"
+#include "cdc_views/PinEntryView.h"
 
 #include <mbedtls/ecp.h>
 #include <mbedtls/ecdsa.h>
@@ -146,68 +146,134 @@ bool TropicBackend::verifyP256(const uint8_t pub64[64], const uint8_t digest[32]
     return crypto().p256_verify(pub64, digest, sig64);
 }
 
-// ---- display + PIN. Thin wrappers over the firmware UI; adapted in the fork. ----
-Role TropicBackend::promptAndAuthorize(const Intent& intent, Role requested,
-                                       bool softwareKey, bool* duress) {
-    *duress = false;
+// ---- async e-paper + keypad approval (non-blocking; driven by the UI task) ----
+//
+// beginApproval() shows the payment fields in an InfoView with Y/N callbacks and
+// returns immediately. On Y we push a PinEntryView; the UI task reads the keypad.
+// PinEntryView's onVerify resolves the PIN to normal/duress, onSuccess finishes
+// the approval (sign + emit), onCancel/N denies. Everything runs on the UI task,
+// so no serial/main-loop blocking and no deadlock.
 
-    char line1[48];
+TropicBackend* TropicBackend::s_self = nullptr;
+
+namespace {
+// Static buffers/views: the badge shows one approval at a time, and view objects
+// must outlive the push (ViewStack stores pointers).
+cdc::ui::InfoView     s_approveView;
+cdc::ui::PinEntryView s_pinView;
+char s_screen[256];
+Role s_requested = Role::NONE;
+bool s_duress = false;
+
+// PinEntryView verify: true if the PIN is the badge PIN or the duress PIN. We
+// record which one so finishApproval can select the duress key. Mirrors the
+// cdc-badge-os AppUi unlock logic.
+bool onPinVerify(const char* pin) {
+    auto& pm = cdc::core::PinManager::instance();
+    if (s_requested == Role::DAF && pm.hasDuressPin() && pm.isDuressPin(pin)) {
+        s_duress = true;
+        return true;
+    }
+    s_duress = false;
+    return pm.verifyBadgePin(pin);
+}
+
+void onPinSuccess() {
+    auto& stack = cdc::ui::ViewStack::instance();
+    stack.releaseExclusive(&s_pinView);
+    stack.pop(); // remove PIN view
+    stack.pop(); // remove the approval InfoView
+    stack.render();
+    if (TropicBackend::s_self) {
+        // STOCK stays STOCK, DAF stays DAF (role bits are what the contract checks);
+        // duress only swaps the signing key, invisibly.
+        TropicBackend::s_self->finishApproval(
+            IBadgeBackend::Outcome::APPROVED, s_requested, s_duress);
+    }
+}
+
+void onPinCancel() {
+    auto& stack = cdc::ui::ViewStack::instance();
+    stack.releaseExclusive(&s_pinView);
+    stack.pop();
+    stack.pop();
+    stack.render();
+    if (TropicBackend::s_self)
+        TropicBackend::s_self->finishApproval(IBadgeBackend::Outcome::DENIED,
+                                              Role::NONE, false);
+}
+
+// InfoView Y: approve -> push the PIN entry. N: deny immediately.
+void onApproveYes(void* /*user*/) {
+    auto& stack = cdc::ui::ViewStack::instance();
+    s_pinView.init("PIN", /*maxPinLength=*/8, /*maxAttempts=*/3);
+    s_pinView.setMinLength(4);
+    s_pinView.setOnVerify(onPinVerify);
+    s_pinView.setOnSuccess(onPinSuccess);
+    s_pinView.setOnCancel(onPinCancel);
+    stack.push(&s_pinView);
+    stack.acquireExclusive(&s_pinView);
+    stack.render();
+}
+
+void onApproveNo(void* /*user*/) {
+    auto& stack = cdc::ui::ViewStack::instance();
+    stack.pop(); // remove the approval InfoView
+    stack.render();
+    if (TropicBackend::s_self)
+        TropicBackend::s_self->finishApproval(IBadgeBackend::Outcome::DENIED,
+                                              Role::NONE, false);
+}
+} // namespace
+
+bool TropicBackend::beginApproval(const Intent& intent, Role requested,
+                                  bool softwareKey, ApprovalDone done, void* engineCtx) {
+    if (pendActive_) return false; // one approval at a time
+    s_self = this;
+    pendDone_ = done;
+    pendEngine_ = engineCtx;
+    pendRequested_ = requested;
+    pendActive_ = true;
+    s_requested = requested;
+    s_duress = false;
+
     const char* roleStr = (requested == Role::STOCK) ? "RESPONSABLE STOCK (simule)"
                         : (requested == Role::DAF)   ? "DAF (simule)"
-                                                     : "ROLE?";
-    std::snprintf(line1, sizeof(line1), "ROLE : %s", roleStr);
-
-    char benef[32];
-    std::snprintf(benef, sizeof(benef), "benef 0x%02x%02x..%02x%02x",
+                                                     : "ROLE ?";
+    // Build the review screen. Addresses/amounts are what the badge RECOMPUTED and
+    // will sign, never free text from the agent.
+    std::snprintf(s_screen, sizeof(s_screen),
+                  "%s%s\n"
+                  "Benef: 0x%02x%02x..%02x%02x\n"
+                  "Montant: %llu (tok#%u)\n"
+                  "reqId: %lu  nonce: %lu\n"
+                  "Echeance: %lu\n"
+                  "[Y] approuver  [N] refuser",
+                  softwareKey ? "** CLE LOGICIELLE **\n" : "",
+                  roleStr,
                   intent.beneficiary[0], intent.beneficiary[1],
-                  intent.beneficiary[18], intent.beneficiary[19]);
-    char amount[40];
-    std::snprintf(amount, sizeof(amount), "montant %llu (tok#%u)",
-                  static_cast<unsigned long long>(intent.amount), intent.token);
+                  intent.beneficiary[18], intent.beneficiary[19],
+                  static_cast<unsigned long long>(intent.amount), intent.token,
+                  static_cast<unsigned long>(intent.reqId),
+                  static_cast<unsigned long>(intent.nonce),
+                  static_cast<unsigned long>(intent.deadline));
 
-    // First bring-up UX: show the fields and read the PIN over the serial Console.
-    // (The e-paper ConfirmView + PinEntryView flow is a documented follow-up; it
-    // does not change what is signed or the duress semantics below.)
-    using cdc::serial::Console;
-    Console::printf("\r\n==== LASTWORD approval ====\r\n");
-    if (softwareKey) Console::printf("  [SOFTWARE KEY - hardware guarantee NOT demonstrated]\r\n");
-    Console::printf("  %s\r\n", line1);
-    Console::printf("  %s\r\n", benef);
-    Console::printf("  %s\r\n", amount);
-    Console::printf("  deadline %lu  reqId %lu\r\n",
-                    static_cast<unsigned long>(intent.deadline),
-                    static_cast<unsigned long>(intent.reqId));
-    Console::printf("  enter PIN then NEWLINE (empty = refuse): ");
+    auto& stack = cdc::ui::ViewStack::instance();
+    s_approveView.init("LASTWORD", s_screen);
+    s_approveView.setYesNoCallbacks(onApproveYes, onApproveNo, nullptr);
+    stack.push(&s_approveView);
+    stack.render();
+    return true;
+}
 
-    char pin[cdc::core::PinManager::PIN_MAX + 1] = {};
-    size_t pl = 0;
-    for (;;) {
-        int c = Console::getchar();
-        if (c < 0) continue;                       // non-blocking: spin until input
-        if (c == '\r' || c == '\n') break;
-        if (c == 0x08 || c == 0x7F) {              // backspace
-            if (pl) --pl;
-            continue;
-        }
-        if (pl < sizeof(pin) - 1) pin[pl++] = static_cast<char>(c);
-    }
-    pin[pl] = '\0';
-    if (pl == 0) { Console::printf("refused\r\n"); return Role::NONE; }
-
-    // Real duress logic (mirrors cdc-badge-os AppUi unlock): a duress PIN takes the
-    // duress path (same outward behaviour, caller stays DAF); otherwise the badge
-    // PIN approves. The chip has one badge PIN + one duress PIN, so the stock/DAF
-    // split is enforced by the signed role bits, not by distinct PINs.
-    auto& pm = cdc::core::PinManager::instance();
-    if (requested == Role::DAF && pm.hasDuressPin() && pm.isDuressPin(pin)) {
-        *duress = true;
-        return Role::DAF;
-    }
-    if (pm.verifyBadgePin(pin)) {
-        return requested; // STOCK stays STOCK, DAF stays DAF (role bits are signed)
-    }
-    Console::printf("wrong PIN\r\n");
-    return Role::NONE;
+void TropicBackend::finishApproval(Outcome outcome, Role role, bool duress) {
+    if (!pendActive_) return;
+    pendActive_ = false;
+    ApprovalDone done = pendDone_;
+    void* ctx = pendEngine_;
+    pendDone_ = nullptr;
+    pendEngine_ = nullptr;
+    if (done) done(ctx, outcome, role, duress);
 }
 
 bool TropicBackend::signDigest(Role role, bool duress, const uint8_t digest[32],
