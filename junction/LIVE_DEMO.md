@@ -60,6 +60,30 @@ $env:BRIDGE_URL  = "http://127.0.0.1:8099"
 
 Open <http://127.0.0.1:8090>, click the **Live demo** tab.
 
+### Simulated ↔ Real toggle
+
+The Live demo tab has a **Badge transport** switch at the top:
+
+- **Simulated** — the bridge talks to a local `badge-sim` over TCP (`BRIDGE_SIM_TRANSPORT`,
+  default `tcp:127.0.0.1:8766`). No radio. Good for rehearsing the flow.
+- **Real LoRa** — the bridge transmits the I3 frame over the mesh (`BRIDGE_REAL_TRANSPORT`,
+  default `mesh:COM8`) to the HP junction + badge.
+
+Flipping the switch calls `PUT /transport` on the bridge, which **re-provisions the badge**
+on the new link (HELLO + PROVISION) — the TCP sim and the mesh/HP badge are different badge
+instances. The mesh path takes ~15 s to provision. If the new transport can't be reached
+(e.g. the HP junction isn't up yet), the switch fails cleanly and the bridge **stays on the
+previous transport** — the toggle snaps back and shows why.
+
+For the simulated side you need a badge-sim listening:
+
+```powershell
+python badge-sim/badge_sim.py --tcp 127.0.0.1:8766 --auto
+```
+
+Set the two targets per rig with `BRIDGE_SIM_TRANSPORT` / `BRIDGE_REAL_TRANSPORT` (or send
+an explicit `{"spec":"mesh:COMx"}` to `PUT /transport`).
+
 > Bedrock note: Bedrock is network-blocked on the Dell, so the Dell dashboard falls back to
 > the **local deterministic reader** for the on-site read. For a demo that reads with the
 > **real Bedrock agent**, run the dashboard on the EC2 (where Bedrock + the live L1 already

@@ -39,12 +39,50 @@ class ProposalIn(BaseModel):
         return v
 
 
+class TransportIn(BaseModel):
+    model_config = {"extra": "forbid"}
+    # Either give an explicit spec, or a mode we resolve from the configured sim/real specs.
+    mode: str | None = None          # "simulated" | "real"
+    spec: str | None = None          # e.g. "tcp:127.0.0.1:8766" | "mesh:COM8"
+
+
 def create_app(flow: Flow) -> FastAPI:
+    import os as _os
+
     app = FastAPI(title="LASTWORD bridge", version="1.0.0")
+
+    # the two switchable transports (operator-overridable via env)
+    SIM_SPEC = _os.environ.get("BRIDGE_SIM_TRANSPORT", "tcp:127.0.0.1:8766")
+    REAL_SPEC = _os.environ.get("BRIDGE_REAL_TRANSPORT", "mesh:COM8")
 
     @app.get("/health")
     def health():
         return {"ok": True, "gateway_pub": flow.gateway.public_hex()}
+
+    @app.get("/transport")
+    def get_transport():
+        return {"spec": flow.transport_spec, "mode": flow.mode,
+                "sim_spec": SIM_SPEC, "real_spec": REAL_SPEC,
+                "pubkeys": flow.pubkeys}
+
+    @app.put("/transport")
+    def put_transport(body: TransportIn):
+        if body.spec:
+            spec = body.spec
+        elif body.mode == "simulated":
+            spec = SIM_SPEC
+        elif body.mode == "real":
+            spec = REAL_SPEC
+        else:
+            raise HTTPException(status_code=422,
+                                detail="give mode ('simulated'|'real') or an explicit spec")
+        try:
+            pubkeys = flow.set_transport(spec)
+        except Exception as e:
+            # the previous transport stays active; report why the switch failed
+            raise HTTPException(status_code=502,
+                                detail=f"could not switch to {spec}: {type(e).__name__}: {e}")
+        return {"spec": flow.transport_spec, "mode": flow.mode, "pubkeys": pubkeys}
 
     @app.post("/proposals")
     def post_proposal(body: ProposalIn):

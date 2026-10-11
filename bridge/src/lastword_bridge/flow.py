@@ -55,18 +55,53 @@ class Proposal:
 class Flow:
     def __init__(self, chain: ChainClient, gateway: GatewayKey, journal: Journal,
                  transport, frame_key: bytes, badge_id: int,
-                 contract_addr_bytes: bytes, chain_id: int):
+                 contract_addr_bytes: bytes, chain_id: int,
+                 transport_spec: str = "", provision_fn=None):
         self.chain = chain
         self.gateway = gateway
         self.journal = journal
         self.transport = transport
+        self.transport_spec = transport_spec     # e.g. "tcp:127.0.0.1:8766" | "mesh:COM8"
+        self.provision_fn = provision_fn          # callback(transport) -> pubkeys dict
+        self.pubkeys: dict | None = None
         self.frame_key = frame_key
         self.badge_id = badge_id
         self.contract_addr = contract_addr_bytes
         self.chain_id = chain_id
         self._counter = 1
         self._lock = threading.Lock()
+        self._tlock = threading.Lock()            # guards transport swaps
         self.proposals: dict[int, Proposal] = {}
+
+    @property
+    def mode(self) -> str:
+        """Human label for the active transport: 'simulated' (tcp) or 'real' (mesh/serial)."""
+        kind = (self.transport_spec or "").split(":", 1)[0]
+        return "simulated" if kind == "tcp" else ("real" if kind in ("mesh", "serial") else kind)
+
+    def set_transport(self, spec: str):
+        """Swap the badge transport at runtime (simulated <-> real) and re-provision.
+
+        The TCP sim badge and the mesh/HP badge are DIFFERENT badge instances, so the new
+        one must be HELLO'd + PROVISION'd before any flow runs. Raises on failure and leaves
+        the previous transport in place.
+        """
+        from .transport import make_transport
+        with self._tlock:
+            new = make_transport(spec)
+            pubkeys = self.provision_fn(new) if self.provision_fn else None
+            # only commit once provisioning succeeded
+            old = self.transport
+            self.transport = new
+            self.transport_spec = spec
+            self.pubkeys = pubkeys
+            try:
+                if hasattr(old, "close"):
+                    old.close()
+            except Exception:
+                pass
+            self.journal.append("TRANSPORT", "pont", 0, {"spec": spec, "mode": self.mode})
+            return pubkeys
 
     def _next_counter(self) -> int:
         with self._lock:

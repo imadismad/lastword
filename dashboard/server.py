@@ -301,6 +301,36 @@ def bridge_health():
         return {"up": False, "detail": str(e)}
 
 
+@app.get("/api/transport")
+def get_transport():
+    """Read the bridge's active badge transport (simulated TCP vs real LoRa mesh)."""
+    try:
+        r = requests.get(f"{BRIDGE_URL}/transport", timeout=5)
+    except Exception as e:
+        return {"available": False, "detail": f"bridge unreachable: {e}"}
+    if not r.ok:
+        # older bridge without the toggle endpoint
+        return {"available": False, "detail": "bridge has no transport endpoint"}
+    return {"available": True, **r.json()}
+
+
+@app.put("/api/transport")
+def put_transport(body: dict):
+    """Switch the bridge transport. Body: {"mode":"simulated"|"real"} or {"spec":"..."}.
+
+    Switching re-provisions the badge on the new transport (the TCP sim and the mesh/HP
+    badge are different instances), which can take ~15s for the mesh path.
+    """
+    try:
+        r = requests.put(f"{BRIDGE_URL}/transport", json=body, timeout=40)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"bridge unreachable: {e}")
+    if not r.ok:
+        detail = r.json().get("detail") if r.content else "bridge error"
+        raise HTTPException(status_code=r.status_code, detail=detail)
+    return r.json()
+
+
 # --------------------------------------------------------- Live demo (hardware)
 _MESH_CACHE = {"t": 0.0, "data": None}
 

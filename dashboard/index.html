@@ -96,6 +96,19 @@
   .badge-pill.off { color:var(--bad); border-color:#5f1e28; }
   .lanes { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
   @media (max-width:900px){ .lanes{ grid-template-columns:1fr; } main{ grid-template-columns:1fr; } }
+  /* transport switch */
+  .switch { position:relative; display:inline-flex; background:var(--panel2);
+    border:1px solid var(--line); border-radius:999px; padding:3px; cursor:pointer;
+    user-select:none; }
+  .switch .opt { position:relative; z-index:1; padding:5px 14px; font-size:12px;
+    font-weight:600; color:var(--dim); transition:color .18s; }
+  .switch.sim .opt[data-mode="simulated"] { color:#0f1115; }
+  .switch.real .opt[data-mode="real"] { color:#fff; }
+  .switch .knob { position:absolute; top:3px; bottom:3px; width:calc(50% - 3px);
+    border-radius:999px; transition:transform .18s, background .18s; z-index:0; }
+  .switch.sim .knob { transform:translateX(0); background:var(--warn); }
+  .switch.real .knob { transform:translateX(100%); background:var(--ok); }
+  .switch.busy { opacity:.6; pointer-events:none; }
 </style>
 </head>
 <body>
@@ -214,6 +227,27 @@
 <!-- ======================= LIVE DEMO (100% hardware) ======================= -->
 <main id="viewLive" class="hidden" style="grid-template-columns:1fr">
   <div>
+    <div class="panel">
+      <div class="flex" style="align-items:center; justify-content:space-between">
+        <h2 style="margin:0">Badge transport</h2>
+        <div class="flex" style="align-items:center; gap:10px; flex:none">
+          <span class="muted" id="txpSpec" style="font-family:var(--mono)"></span>
+          <div class="switch" id="txpSwitch" title="switch the badge transport">
+            <span class="opt" data-mode="simulated">Simulated</span>
+            <span class="opt" data-mode="real">Real LoRa</span>
+            <span class="knob" id="txpKnob"></span>
+          </div>
+        </div>
+      </div>
+      <p class="muted" id="txpMsg" style="margin:8px 0 0"></p>
+      <p class="muted" style="margin:8px 0 0">
+        <b>Simulated</b> sends the I3 frame to a badge-sim over local TCP — no radio.
+        <b>Real LoRa</b> transmits it over the mesh: Dell nugget → battery relay → HP
+        junction + badge. Switching re-provisions the badge on the new link (~15 s for the
+        mesh). The dashboard holds no key and no payment power either way.
+      </p>
+    </div>
+
     <div class="panel">
       <h2>100% hardware · the real LoRa mesh path</h2>
       <p class="muted" style="margin:0 0 10px">
@@ -490,9 +524,56 @@ function showView(which) {
   $('tabLive').classList.toggle('active', live);
   if (live) {
     loadTopology();
+    loadTransport();
     refreshMesh();
     if (!meshTimer) meshTimer = setInterval(refreshMesh, 25000);
   } else if (meshTimer) { clearInterval(meshTimer); meshTimer = null; }
+}
+
+let TXP = null;
+function paintSwitch(mode, busy) {
+  const sw = $('txpSwitch');
+  sw.classList.toggle('sim', mode === 'simulated');
+  sw.classList.toggle('real', mode === 'real');
+  sw.classList.toggle('busy', !!busy);
+}
+async function loadTransport() {
+  try {
+    TXP = await api('/api/transport');
+  } catch (e) { $('txpMsg').textContent = ''; return; }
+  if (!TXP.available) {
+    $('txpSwitch').classList.add('busy');
+    $('txpSpec').textContent = '';
+    $('txpMsg').textContent = TXP.detail || 'transport toggle unavailable on this bridge';
+    return;
+  }
+  paintSwitch(TXP.mode, false);
+  $('txpSpec').textContent = TXP.spec || '';
+  $('txpMsg').textContent = TXP.mode === 'real'
+    ? 'live: frames go over the LoRa mesh to the HP badge.'
+    : 'simulated: frames go to the local badge-sim over TCP (no radio).';
+}
+async function switchTransport(mode) {
+  if (!TXP || !TXP.available || mode === TXP.mode) return;
+  paintSwitch(mode, true);
+  $('txpMsg').textContent = (mode === 'real'
+    ? 'switching to the real LoRa mesh and provisioning the HP badge… (~15 s)'
+    : 'switching to the simulated TCP badge…');
+  try {
+    const r = await api('/api/transport', {method:'PUT', headers:{'content-type':'application/json'},
+      body: JSON.stringify({mode})});
+    TXP.mode = r.mode; TXP.spec = r.spec; TXP.pubkeys = r.pubkeys;
+    paintSwitch(r.mode, false);
+    $('txpSpec').textContent = r.spec || '';
+    $('txpMsg').textContent = (r.mode === 'real'
+      ? '✓ real: badge provisioned over the mesh. Frames now cross the radio.'
+      : '✓ simulated: back on the local TCP badge-sim.');
+    refreshMesh(true);
+  } catch (e) {
+    // the bridge keeps the previous transport on failure — reflect that
+    paintSwitch(TXP.mode, false);
+    $('txpMsg').textContent = 'switch failed: ' + e.message + ' — staying on ' + TXP.mode + '.';
+  }
 }
 
 async function loadTopology() {
@@ -635,6 +716,8 @@ async function liveSend() {
 $('tabAgent').onclick = () => showView('agent');
 $('tabLive').onclick = () => showView('live');
 $('refreshMesh').onclick = () => refreshMesh(true);
+$('txpSwitch').querySelectorAll('.opt').forEach(o =>
+  o.onclick = () => switchTransport(o.dataset.mode));
 $('liveEvalBtn').onclick = liveEvaluate;
 $('liveSendBtn').onclick = liveSend;
 $('readerMode').onchange = toggleBedrock;

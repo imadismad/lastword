@@ -7,8 +7,14 @@ Transports:
 
 Env (see .env.example):
   LASTWORD_RPC_URL, LASTWORD_CONTRACT_ADDRESS, BRIDGE_PRIVATE_KEY
-  BRIDGE_TRANSPORT (default tcp:127.0.0.1:8766)
+  BRIDGE_TRANSPORT (default tcp:127.0.0.1:8766)   the transport active at startup
+  BRIDGE_SIM_TRANSPORT  (default tcp:127.0.0.1:8766)  the "simulated" toggle target
+  BRIDGE_REAL_TRANSPORT (default mesh:COM8)           the "real" toggle target
   BRIDGE_HOST (default 127.0.0.1), BRIDGE_PORT (default 8099)
+
+The badge transport can be switched at runtime (simulated TCP <-> real LoRa mesh) via
+PUT /transport {"mode":"simulated"|"real"} — the dashboard "Live demo" tab exposes this
+as a toggle. Switching re-provisions the badge on the new link.
   BADGE_ID (default 40961), FRAME_KEY (hex 32B; default derived from seed)
   GATEWAY_KEY_FILE (default .gateway.key, gitignored) or GATEWAY_SEED
 """
@@ -82,14 +88,21 @@ def build_flow() -> Flow:
     badge_id = int(os.environ.get("BADGE_ID", "40961"))
     contract_bytes = bytes.fromhex(Web3.to_checksum_address(contract)[2:])
 
+    def _provision(t):
+        pk = provision_badge(t, frame_key, chain.chain_id, contract_bytes)
+        print(f"[bridge] badge provisioned. pubkeys: stock={pk['stock'][:12]}... "
+              f"daf={pk['daf'][:12]}... duress={pk['duress'][:12]}...")
+        return pk
+
     # provision the badge now so it can decrypt frames and recompute digests
-    pubkeys = provision_badge(transport, frame_key, chain.chain_id, contract_bytes)
-    print(f"[bridge] badge provisioned. pubkeys: stock={pubkeys['stock'][:12]}... "
-          f"daf={pubkeys['daf'][:12]}... duress={pubkeys['duress'][:12]}...")
+    pubkeys = _provision(transport)
     print(f"[bridge] gateway pubkey: {gateway.public_hex()}")
 
-    return Flow(chain, gateway, journal, transport, frame_key, badge_id,
-                contract_bytes, chain.chain_id)
+    flow = Flow(chain, gateway, journal, transport, frame_key, badge_id,
+                contract_bytes, chain.chain_id,
+                transport_spec=transport_spec, provision_fn=_provision)
+    flow.pubkeys = pubkeys
+    return flow
 
 
 def main():
