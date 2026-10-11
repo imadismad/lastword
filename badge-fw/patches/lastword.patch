@@ -1,0 +1,77 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 947b596..57a1a50 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -99,6 +99,11 @@ endif()
+ # Exclude upstream or legacy components
+ set(EXCLUDE_COMPONENTS libtropic)
+ 
++# LASTWORD: pull in mod_lastword, which lives OUTSIDE this submodule (in
++# badge-fw/mod_lastword) so upstream cdc-badge-os stays clean. See
++# badge-fw/README.md. Must be set before project() so the component is found.
++set(EXTRA_COMPONENT_DIRS ${CMAKE_SOURCE_DIR}/../mod_lastword)
++
+ # Global include directories (for tusb_config.h)
+ include_directories(BEFORE
+     ${CMAKE_SOURCE_DIR}/include
+diff --git a/main/CMakeLists.txt b/main/CMakeLists.txt
+index 3a1f928..b115fd0 100644
+--- a/main/CMakeLists.txt
++++ b/main/CMakeLists.txt
+@@ -21,6 +21,7 @@ set(MODULES
+     mod_vfat
+     mod_browser
+     mod_msc
++    mod_lastword
+ )
+ # =============================================================================
+ 
+diff --git a/main/module_defaults.h b/main/module_defaults.h
+index 422464b..fa6c833 100644
+--- a/main/module_defaults.h
++++ b/main/module_defaults.h
+@@ -26,6 +26,7 @@ namespace cdc::module_defaults {
+     X("mod_usbhid",     false) \
+     X("mod_otphid",     false) \
+     X("mod_vfat",       true)  \
+-    X("mod_msc",        false)
++    X("mod_msc",        false) \
++    X("mod_lastword",   true)
+ 
+ } // namespace cdc::module_defaults
+diff --git a/main/tropic_slot_map.h b/main/tropic_slot_map.h
+index 87b4e77..f00a5a7 100644
+--- a/main/tropic_slot_map.h
++++ b/main/tropic_slot_map.h
+@@ -36,6 +36,7 @@ static constexpr uint16_t RMEM_SLOT_MIN_ALLOC = 1;
+ #define MODULE_ID_PLUGIN_POOL 7
+ #define MODULE_ID_MOD_GPG_RSA 8
+ #define MODULE_ID_MOD_PIV 9
++#define MODULE_ID_MOD_LASTWORD 10
+ #define MODULE_ID_UNKNOWN 255
+ 
+ // ECC slot ranges
+@@ -47,8 +48,14 @@ static constexpr uint16_t RMEM_SLOT_MIN_ALLOC = 1;
+ // R-Mem, TROPIC01 has no ECDH), 8 = 9E.
+ #define ECC_SLOT_MOD_PIV_START 5
+ #define ECC_SLOT_MOD_PIV_END 8
++// FIDO2 shrunk by 3 slots (was 9-30) to carve a dedicated LASTWORD range.
++// On a vierge badge no FIDO2 credential lives in 28-30, so nothing is lost.
+ #define ECC_SLOT_MOD_FIDO2_START 9
+-#define ECC_SLOT_MOD_FIDO2_END 30
++#define ECC_SLOT_MOD_FIDO2_END 27
++// mod_lastword owns 3 P-256 slots: stock=28, DAF=29, duress=30. Keys are
++// generated in-chip at first boot and never leave the TROPIC01.
++#define ECC_SLOT_MOD_LASTWORD_START 28
++#define ECC_SLOT_MOD_LASTWORD_END 30
+ // Plugin ECC pool (single reserved slot, the last physical ECC slot).
+ #define ECC_SLOT_MOD_PLUGINS_START 31
+ #define ECC_SLOT_MOD_PLUGINS_END 31
+@@ -86,6 +93,7 @@ static constexpr uint16_t RMEM_SLOT_MIN_ALLOC = 1;
+     X("mod_ca", MODULE_ID_MOD_CA, ECC_SLOT_MOD_CA_START, ECC_SLOT_MOD_CA_END) \
+     X("mod_piv", MODULE_ID_MOD_PIV, ECC_SLOT_MOD_PIV_START, ECC_SLOT_MOD_PIV_END) \
+     X("mod_fido2", MODULE_ID_MOD_FIDO2, ECC_SLOT_MOD_FIDO2_START, ECC_SLOT_MOD_FIDO2_END) \
++    X("mod_lastword", MODULE_ID_MOD_LASTWORD, ECC_SLOT_MOD_LASTWORD_START, ECC_SLOT_MOD_LASTWORD_END) \
+     X("mod_plugins", MODULE_ID_PLUGIN_POOL, ECC_SLOT_MOD_PLUGINS_START, ECC_SLOT_MOD_PLUGINS_END)
+ 
+ #define TROPIC_RMEM_SLOT_MAP(X) \

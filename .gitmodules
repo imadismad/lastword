@@ -1,0 +1,3 @@
+[submodule "badge-fw/cdc-badge-os"]
+	path = badge-fw/cdc-badge-os
+	url = https://github.com/krim404/cdc-badge-os.git
