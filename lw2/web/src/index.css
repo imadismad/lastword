@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink-950: #060a13;
+  --color-ink-900: #0b1220;
+  --color-ink-850: #0f182a;
+  --color-ink-800: #131e33;
+  --color-ink-700: #1c2a44;
+  --color-ink-600: #2a3a5a;
+  --color-ink-400: #7d8cab;
+  --color-ink-300: #a8b4cc;
+  --color-ink-100: #e6ebf5;
+  --color-ok: #34d399;
+  --color-wait: #fbbf24;
+  --color-bad: #fb7185;
+  --color-air: #60a5fa;
+  --color-violet: #a78bfa;
+  --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", ui-monospace, "Consolas", monospace;
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: radial-gradient(1200px 600px at 15% -10%, #12224a 0%, transparent 60%),
+              radial-gradient(900px 500px at 110% 10%, #1a1440 0%, transparent 55%),
+              var(--color-ink-950);
+  color: var(--color-ink-100);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.panel {
+  background: color-mix(in oklab, var(--color-ink-900) 82%, transparent);
+  border: 1px solid var(--color-ink-700);
+  border-radius: 16px;
+  backdrop-filter: blur(6px);
+}
+.label {
+  font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--color-ink-400); font-weight: 600;
+}
+.mono { font-family: var(--font-mono); }
+
+@keyframes fly-right { from { left: 4%; opacity: 0 } 10% { opacity: 1 } 90% { opacity: 1 } to { left: 92%; opacity: 0 } }
+@keyframes fly-left  { from { left: 92%; opacity: 0 } 10% { opacity: 1 } 90% { opacity: 1 } to { left: 4%; opacity: 0 } }
+.packet-r { animation: fly-right var(--dur, 1.8s) linear forwards; }
+.packet-l { animation: fly-left var(--dur, 1.8s) linear forwards; }
+
+@keyframes ring { 0% { transform: scale(.8); opacity: .7 } 100% { transform: scale(2.4); opacity: 0 } }
+.ring { animation: ring 1.6s ease-out infinite; }
+
+@keyframes pulse-soft { 0%, 100% { opacity: 1 } 50% { opacity: .45 } }
+.pulse-soft { animation: pulse-soft 1.4s ease-in-out infinite; }
+
+::-webkit-scrollbar { width: 8px; height: 8px }
+::-webkit-scrollbar-thumb { background: var(--color-ink-700); border-radius: 8px }

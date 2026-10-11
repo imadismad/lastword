@@ -56,3 +56,7 @@ infra/bedrock.env
 # .git and node_modules; we vendor only the LASTWORD fixes in
 # infra/explorer-patches/. setup_explorer.sh re-clones + applies them.
 /explorer/
+
+# LASTWORD 2.0: the built UI is committed so the demo runs without Node; runtime data is not
+!lw2/web/dist/
+lw2/data/
