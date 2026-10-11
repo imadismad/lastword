@@ -76,6 +76,9 @@ public:
     // signature before anything is displayed. 64 bytes X||Y.
     virtual bool gatewayPublicKey(uint8_t out64[64]) = 0;
 
+    // Install the gateway public key (64 B X||Y), carried by PROVISION.
+    virtual void setGatewayPublicKey(const uint8_t pub64[64]) = 0;
+
     // Verify a P-256 signature (r||s, 64 bytes) over a 32-byte digest with the
     // given 64-byte public key. Used only for the gateway check.
     virtual bool verifyP256(const uint8_t pub64[64], const uint8_t digest[32],

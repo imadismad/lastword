@@ -32,7 +32,16 @@ _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 sys.path.insert(0, os.path.join(_REPO, "proto", "src"))
 
 import serial  # pyserial
-from lastword_proto import pack_message, unpack_message, Command, RefuseReason
+from lastword_proto import (
+    pack_message, unpack_message, Command, RefuseReason,
+    Intent, Role, digest, build_request_frame, open_frame, parse_response_body,
+    pub_from_bytes, verify_digest,
+)
+from lastword_proto.crypto import sig_from_bytes, is_low_s
+
+# the bridge's gateway key (same seed as badge-sim) so the real badge verifies us
+sys.path.insert(0, os.path.join(_REPO, "bridge", "src"))
+from lastword_bridge.gatewaykey import GatewayKey
 
 
 ENTER_BINARY_LINE = b"lastword-bin\n"
@@ -119,31 +128,50 @@ def enter_binary(ser: serial.Serial):
     """Put the console into a known-clean text state, then install the byte
     interceptor with the 'lastword-bin' command.
 
-    Residual-state guard: a previous (aborted) binary exchange can leave CRC/frame
-    bytes in the firmware's line buffer, which then get prepended to our next
-    command ("Unknown command '\\xfb\\xac lastword-bin'"). To clear it we first send
-    a lone newline (flushes any partial line), drain, THEN send the command."""
-    # 1. flush any partial line left in the firmware's command buffer
+    Residual-state guard: a previous (aborted) binary exchange can leave bytes in
+    the firmware's line buffer that get prepended to our next command ("Unknown
+    command '\\xfb\\xac lastword-bin'"), OR leave the byte interceptor still armed.
+    We clear BOTH: send 0x00 (ends any binary frame / lets an armed interceptor
+    time out), then several newlines (flush any partial text line), drain, and only
+    then send the command — retrying a couple of times if needed."""
+    # Secure serial is enabled on this build: EVERY command except PING/AUTH needs
+    # a prior AUTH (confirmed by the badge replying "Not authenticated" to
+    # lastword-bin, and by the cdc-badge-os serial-console docs). The session
+    # times out after 5 min idle, so authenticate at the start of every exchange.
     ser.reset_input_buffer()
-    ser.write(b"\n")
+    # 0x00 closes any residual binary frame; newline flushes a partial text line
+    ser.write(b"\x00\n")
     ser.flush()
+    _drain(ser, 0.4)
+    ser.write(b"AUTH 123456\n")
+    ser.flush()
+    time.sleep(0.6)
     _drain(ser, 0.3)
-    # 2. now send the real command and wait for the post-command prompt
-    ser.write(ENTER_BINARY_LINE)
-    ser.flush()
-    deadline = time.time() + 1.5
-    seen = bytearray()
-    while time.time() < deadline:
-        d = ser.read(256)
-        if d:
-            seen += d
-            if b"Executing: lastword-bin" in seen and seen.rstrip().endswith(b">"):
-                break
-    if b"Unknown command" in seen:
-        raise RuntimeError("badge did not accept 'lastword-bin' (dirty line state): "
-                           + repr(bytes(seen[-120:])))
-    time.sleep(0.1)
-    ser.reset_input_buffer()
+
+    for attempt in range(3):
+        ser.reset_input_buffer()
+        ser.write(b"\n\n")
+        ser.flush()
+        _drain(ser, 0.4)
+
+        ser.reset_input_buffer()
+        ser.write(ENTER_BINARY_LINE)
+        ser.flush()
+        deadline = time.time() + 1.5
+        seen = bytearray()
+        while time.time() < deadline:
+            d = ser.read(256)
+            if d:
+                seen += d
+                if b"Executing: lastword-bin" in seen and seen.rstrip().endswith(b">"):
+                    break
+        if b"Executing: lastword-bin" in seen and b"Unknown command" not in seen:
+            time.sleep(0.1)
+            ser.reset_input_buffer()
+            return
+        # dirty: wait out any armed interceptor idle-timeout (3 s) and retry
+        time.sleep(3.2)
+    raise RuntimeError("could not enter binary mode cleanly: " + repr(bytes(seen[-120:])))
 
 
 def exchange(ser: serial.Serial, cmd: int, data: bytes = b"") -> tuple[int, bytes]:
@@ -179,22 +207,102 @@ def do_hello(ser: serial.Serial) -> dict:
     }
 
 
+# Demo chain params (match proto/vectors + the local L1). Overridable via CLI.
+DEFAULT_CHAIN_ID = 99999            # infra/genesis.json chainId
+DEFAULT_CONTRACT = bytes(20)        # 0x000..0 placeholder for the signature test
+
+
+def do_provision(ser: serial.Serial, frame_key: bytes, chain_id: int,
+                 contract_addr: bytes, gateway_pub: bytes):
+    assert len(frame_key) == 32 and len(contract_addr) == 20 and len(gateway_pub) == 64
+    payload = frame_key + chain_id.to_bytes(8, "big") + contract_addr + gateway_pub
+    rcmd, data = exchange(ser, Command.PROVISION, payload)
+    if rcmd != Command.PROV_OK:
+        reason = data[0] if (rcmd == Command.REFUSED and data) else None
+        raise RuntimeError(f"PROVISION failed: cmd 0x{rcmd:02x}"
+                           + (f" reason 0x{reason:02x}" if reason is not None else ""))
+
+
+def do_request(ser: serial.Serial, frame_key: bytes, chain_id: int,
+               contract_addr: bytes, gateway: "GatewayKey", intent: "Intent",
+               badge_id: int, counter: int, approve_timeout: float = 90.0):
+    """Send a REQUEST and wait for the human to approve on the badge keypad.
+
+    Builds the I2 request frame (intent + gateway sig over the digest), sends it,
+    then waits up to approve_timeout for the deferred RESPONSE/REFUSED that the
+    badge emits AFTER you press Y, type the PIN, and press Y again on the device."""
+    dg = digest(intent, chain_id, contract_addr)
+    gw_sig = gateway.sign(dg)
+    frame = build_request_frame(frame_key, badge_id, counter, intent.encode(), gw_sig)
+    # send REQUEST, then wait a long time for the human approval reply
+    ser.write(b"\x00" + pack_message(Command.REQUEST, frame))
+    ser.flush()
+    print("  >> REQUEST sent. On the badge: review the screen, press Y, "
+          "enter PIN 123456, press Y.")
+    rframe = read_cobs_frame(ser, timeout=approve_timeout)
+    rcmd, data = unpack_message(rframe)
+    if rcmd == Command.REFUSED:
+        reason = data[0] if data else 0xFF
+        raise RuntimeError(f"badge REFUSED request: reason 0x{reason:02x}")
+    if rcmd != Command.RESPONSE:
+        raise RuntimeError(f"unexpected reply cmd 0x{rcmd:02x}")
+    hdr, pt = open_frame(frame_key, data)
+    reqId, decision, badge_sig = parse_response_body(pt)
+    return {"reqId": reqId, "decision": decision, "badge_sig": badge_sig.hex(), "digest": dg.hex()}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", default="/dev/ttyACM0")
     ap.add_argument("--baud", type=int, default=115200)
-    ap.add_argument("cmd", choices=["hello", "pubkeys"])
+    ap.add_argument("--role", choices=["stock", "daf"], default="daf",
+                    help="which role the sign test requests")
+    ap.add_argument("--chain-id", type=int, default=DEFAULT_CHAIN_ID)
+    ap.add_argument("cmd", choices=["hello", "pubkeys", "sign"])
     args = ap.parse_args()
 
     ser = serial.Serial(args.port, args.baud, timeout=0.5)
     time.sleep(0.3)
     try:
+        if args.cmd in ("hello", "pubkeys"):
+            keys = do_hello(ser)
+            print(json.dumps(keys, indent=2))
+            return
+
+        # sign: HELLO (get role pubkeys) -> PROVISION -> REQUEST -> verify signature
         keys = do_hello(ser)
+        role_pub = bytes.fromhex(keys[args.role])
+
+        frame_key = bytes(range(32))          # demo frame key (same both sides)
+        contract_addr = DEFAULT_CONTRACT
+        gateway = GatewayKey.from_seed()      # matches badge's expected gateway key
+
+        do_provision(ser, frame_key, args.chain_id, contract_addr, gateway.public_bytes())
+        print("  provisioned OK (frameKey, chainId, contract, gatewayPub)")
+
+        role = Role.DAF if args.role == "daf" else Role.STOCK
+        intent = Intent(
+            reqId=4242, beneficiary=bytes.fromhex("00112233445566778899aabbccddeeff00112233"),
+            token=0, amount=1500000, nonce=7, deadline=2000000000,
+            quoteHash=bytes(range(32)), flags=int(role), policy=1,
+        )
+        res = do_request(ser, frame_key, args.chain_id, contract_addr, gateway,
+                         intent, badge_id=1, counter=5)
+
+        # verify the badge signature against the role pubkey we read at HELLO
+        pub = pub_from_bytes(role_pub)
+        r, s = sig_from_bytes(bytes.fromhex(res["badge_sig"]))
+        ok = verify_digest(pub, bytes.fromhex(res["digest"]), r, s)
+        print(json.dumps({
+            "reqId": res["reqId"], "decision": res["decision"],
+            "signature_valid": ok, "low_s": is_low_s(s), "role": args.role,
+        }, indent=2))
+        if not ok:
+            raise SystemExit("SIGNATURE INVALID")
+        print("\n  HARDWARE SIGNATURE OK — the TROPIC01 signed a digest the "
+              "verifier accepts.")
     finally:
         ser.close()
-
-    if args.cmd in ("hello", "pubkeys"):
-        print(json.dumps(keys, indent=2))
 
 
 if __name__ == "__main__":

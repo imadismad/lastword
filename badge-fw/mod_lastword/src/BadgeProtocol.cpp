@@ -137,10 +137,14 @@ size_t BadgeProtocol::handleMessage(Cmd cmd, const uint8_t* data, size_t len,
         return pack_message(static_cast<uint8_t>(Cmd::HELLO_OK), blob, sizeof(blob), out, outCap);
     }
     case Cmd::PROVISION: {
-        if (len != 60) return emitRefused(Refuse::OTHER, out, outCap);
+        // frameKey(32) || chainId(8 BE) || contractAddr(20) || gatewayPub(64) = 124
+        if (len != 124) return emitRefused(Refuse::OTHER, out, outCap);
         uint64_t cid = 0;
         for (int i = 0; i < 8; ++i) cid = (cid << 8) | data[32 + i];
         provision(data, cid, data + 40);
+        // Install the gateway public key so handleRequest can verify the request
+        // signature before displaying anything.
+        backend_->setGatewayPublicKey(data + 60);
         return pack_message(static_cast<uint8_t>(Cmd::PROV_OK), nullptr, 0, out, outCap);
     }
     case Cmd::REQUEST:

@@ -110,6 +110,7 @@ public:
         return true;
     }
     bool gatewayPublicKey(uint8_t out[64]) override { std::memcpy(out, gwPub, 64); return true; }
+    void setGatewayPublicKey(const uint8_t pub[64]) override { std::memcpy(gwPub, pub, 64); }
     bool verifyP256(const uint8_t pub[64], const uint8_t dg[32], const uint8_t sig[64]) override {
         return crypto().p256_verify(pub, dg, sig);
     }

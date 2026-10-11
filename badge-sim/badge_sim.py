@@ -69,6 +69,7 @@ class BadgeSim:
         self.frame_key: bytes | None = None
         self.chain_id: int | None = None
         self.contract_addr: bytes | None = None
+        self.gateway_pub: bytes | None = None
         self.counter = 1000  # response frame counter
 
     def pubkeys_blob(self) -> bytes:
@@ -87,11 +88,13 @@ class BadgeSim:
             return pack_message(Command.HELLO_OK, self.pubkeys_blob())
 
         if cmd == Command.PROVISION:
-            if len(data) != 60:
+            # frameKey(32) || chainId(8) || contractAddr(20) || gatewayPub(64) = 124
+            if len(data) != 124:
                 return pack_message(Command.REFUSED, bytes([RefuseReason.OTHER]))
             self.frame_key = data[:32]
             self.chain_id = int.from_bytes(data[32:40], "big")
             self.contract_addr = data[40:60]
+            self.gateway_pub = data[60:124]  # installed gateway pubkey (X||Y)
             print(f"[badge] provisioned: chainId={self.chain_id} "
                   f"contract=0x{self.contract_addr.hex()}")
             return pack_message(Command.PROV_OK)
@@ -120,8 +123,11 @@ class BadgeSim:
         intent = Intent.decode(intent_bytes)
         dg = compute_digest(intent, self.chain_id, self.contract_addr)
 
-        # 3. verify the gateway signature over the digest BEFORE displaying anything
-        gq = _gateway_pub()
+        # 3. verify the gateway signature over the digest BEFORE displaying anything.
+        #    Prefer the gateway pubkey installed by PROVISION; fall back to the
+        #    seed-derived one for older flows/tests.
+        from lastword_proto import pub_from_bytes
+        gq = pub_from_bytes(self.gateway_pub) if getattr(self, "gateway_pub", None) else _gateway_pub()
         gr, gs = sig_from_bytes(gateway_sig)
         if not verify_digest(gq, dg, gr, gs):
             print("[badge] gateway signature INVALID - ignoring request")

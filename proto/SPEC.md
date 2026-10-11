@@ -152,7 +152,7 @@ The whole message is then **COBS-encoded** and terminated by a `0x00` delimiter.
 |------|----------|-----------|------|
 | 0x01 | HELLO    | host->badge | (empty) |
 | 0x81 | HELLO_OK | badge->host | 3 × 64-byte pubkeys: stock(64) \|\| daf(64) \|\| duress(64) (uncompressed X\|\|Y) |
-| 0x02 | PROVISION| host->badge | frameKey(32) \|\| chainId(8 BE) \|\| contractAddr(20) |
+| 0x02 | PROVISION| host->badge | frameKey(32) \|\| chainId(8 BE) \|\| contractAddr(20) \|\| gatewayPub(64, X\|\|Y) |
 | 0x82 | PROV_OK  | badge->host | (empty) |
 | 0x03 | REQUEST  | host->badge | an I2 request frame (type 0x01) |
 | 0x83 | RESPONSE | badge->host | an I2 response frame (type 0x02) |
@@ -161,9 +161,10 @@ The whole message is then **COBS-encoded** and terminated by a `0x00` delimiter.
 Refusal reason codes: `0x01` bad gateway sig, `0x02` bad AEAD/counter, `0x03` user
 refused, `0x04` expired, `0x05` not provisioned, `0xFF` other.
 
-> PROVISION gives the badge the frame key, chainId and contract address it needs to
-> decrypt frames and recompute the digest it displays and signs. (Added per the
-> 22h50 proto brief.)
+> PROVISION gives the badge the frame key, chainId, contract address, and the
+> gateway public key it needs to decrypt frames, recompute the digest it displays
+> and signs, and verify the gateway's request signature before showing anything.
+> Total payload: 32 + 8 + 20 + 64 = 124 bytes.
 
 ---
 

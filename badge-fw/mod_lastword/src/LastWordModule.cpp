@@ -28,7 +28,13 @@ static void cdc_sink(void* /*ctx*/, const uint8_t* bytes, size_t n) {
 // wedge the console). This is the firmware's own raw-stream mechanism; no main.cpp
 // change is needed. Defined before start() so it is in scope at registration.
 static uint64_t s_lastRxUs = 0;
-static constexpr uint64_t BINARY_IDLE_TIMEOUT_US = 3'000'000; // 3 s
+// Idle timeout before the binary channel falls back to the text console. It must
+// be LONGER than any single on-badge operation that happens between two host
+// bytes: a HELLO reads 3 TROPIC01 pubkeys (~4.5 s of sessions), and a REQUEST
+// waits for the human to read the screen and type a PIN. 3 s was far too short
+// (it disarmed the interceptor mid-HELLO, so the next command's bytes fell back to
+// the text parser). Use 120 s; the serial session has its own 5 min auth timeout.
+static constexpr uint64_t BINARY_IDLE_TIMEOUT_US = 120'000'000; // 120 s
 
 static void onInterceptedByte(uint8_t b) {
     uint64_t now = static_cast<uint64_t>(esp_timer_get_time());
