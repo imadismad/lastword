@@ -18,7 +18,12 @@ export function Pipeline({ live, explorer }: { live: Live; explorer?: string }) 
     <section className="panel flex flex-col p-5">
       <div className="flex items-center justify-between">
         <div className="label">2 · Approval pipeline</div>
-        {p && <div className="mono text-[11px] text-ink-400">reqId {p.reqId}</div>}
+        {p && (
+          <a href={`${explorer ?? ''}/payment/${p.reqId}`} target="_blank" rel="noreferrer"
+            className="flex items-center gap-1 text-[11px] font-semibold text-brand hover:underline">
+            trace #{p.reqId} in the explorer <ExternalLink size={11} />
+          </a>
+        )}
       </div>
 
       {!p && (

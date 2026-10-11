@@ -55,3 +55,31 @@ indexes all L1 blocks and their transactions, and the API serves them:
 returns the LASTWORD payment-flow txs to the `LastWord` contract:
 propose (`0x9791e644…`), attest (`0xc984735d…`), approve (`0x512f3635…`),
 all `status: 1`.
+
+
+## Frontend overlay (`frontend/`): LASTWORD Explorer
+
+`setup_explorer.sh` copies `frontend/` over the cloned frontend before `npm run build`.
+It turns the generic CodeNekt explorer into a traceability tool for LASTWORD payments.
+
+- **Payments** (`/payments`, `/payment/<reqId>`): rebuilt from the contract's own events
+  (`Proposed`, `Attested`, `Approved`, `Refused`, `Cancelled`) and calldata, read
+  straight from the chain RPC rather than from Mongo. Each payment shows:
+  - the supplier name;
+  - the amount in dUSD;
+  - the three steps (agent proposal, STOCK attestation, DAF approval), each with its
+    timestamp, transaction, block and the TROPIC01 badge signature;
+  - the ERC-20 transfer that actually moved the funds;
+  - the intent digest and quote hash, so anyone can check them;
+  - an "expired" status once the deadline has passed without approval.
+- **Transaction page**: a LASTWORD panel decodes the call and the 79-byte intent
+  (supplier, amount, signing role, flags) and places the transaction inside its payment.
+- **Address labels**: suppliers (from `agent/demo/whitelist.json`), AI agent, bridge,
+  vault/admin, contract and token are labelled everywhere. Method names are decoded
+  locally, and transaction lists show a supplier + amount chip.
+- **Brand**: LASTWORD name and logo, light theme `#f3f2ee` with `#ff5a1f` as the
+  signature colour. CodeNekt links and Google Analytics removed.
+- **Robustness**: `hooks.server.ts` no longer fails every request when Mongo is down; it
+  serves from the API and the chain and retries every 30 s.
+
+Server-side chain reads use `LW_RPC_URL` (falls back to `PUBLIC_RPC_URL`).

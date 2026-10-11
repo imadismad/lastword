@@ -75,6 +75,12 @@ DB_NAME=lastword_explorer
 NATIVE_SYMBOL=LWT
 EOF
 cd frontend
+# LASTWORD overlay: brand + light theme, payment traceability (/payments, /payment/<reqId>),
+# decoded LASTWORD calls on /tx/<hash>, supplier/role labels on addresses.
+if [ -d "$PATCH_DIR/frontend" ]; then
+  echo "applying explorer frontend overlay from $PATCH_DIR/frontend"
+  cp -rf "$PATCH_DIR/frontend/." .
+fi
 npm install >/tmp/fe_install.log 2>&1 || { echo "frontend npm install FAILED"; tail -20 /tmp/fe_install.log; }
 npm run build >/tmp/fe_build.log 2>&1 || { echo "frontend build FAILED"; tail -30 /tmp/fe_build.log; }
 # SvelteKit default (node adapter) -> run preview or the built node server on :3000
