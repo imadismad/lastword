@@ -53,7 +53,7 @@ def create_app(flow: Flow) -> FastAPI:
 
     # the two switchable transports (operator-overridable via env)
     SIM_SPEC = _os.environ.get("BRIDGE_SIM_TRANSPORT", "tcp:127.0.0.1:8766")
-    REAL_SPEC = _os.environ.get("BRIDGE_REAL_TRANSPORT", "mesh:COM8")
+    REAL_SPEC = _os.environ.get("BRIDGE_REAL_TRANSPORT", "mesh:auto")
 
     @app.get("/health")
     def health():

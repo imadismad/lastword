@@ -706,7 +706,8 @@ async function liveSend() {
   ['read','propose','attest','approve'].forEach(s => ldDot(s,''));
   ldDot('read','done');  // the read already happened above
   ldDot('propose','active');
-  $('liveFlowStatus').textContent = 'submitting to the bridge (mesh transport)…';
+  $('liveFlowStatus').textContent = 'submitting to the bridge ('
+    + (TXP && TXP.mode === 'real' ? 'mesh' : 'simulated TCP') + ' transport)…';
   let reqId;
   try {
     const r = await api('/api/submit', {method:'POST', headers:{'content-type':'application/json'},
@@ -740,7 +741,9 @@ async function liveSend() {
     $('liveFlowStatus').textContent = 'status: ' + s.status + (s.detail ? ' — ' + s.detail : '');
     if (['approved','refused','error','expired'].includes(s.status)) {
       if (s.status === 'approved')
-        $('liveFlowStatus').textContent = '✓ PAID on the live L1 — the frame crossed the real LoRa mesh and the badge said the last word.';
+        $('liveFlowStatus').textContent = onMesh
+          ? '✓ PAID on the live L1 — the frame crossed the real LoRa mesh and the badge said the last word.'
+          : '✓ PAID on the live L1 — via the simulated TCP badge (no radio). Flip to Real LoRa for the mesh path.';
       break;
     }
   }

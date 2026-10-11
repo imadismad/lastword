@@ -95,14 +95,36 @@ class MeshTransport:
             while time.time() < deadline and reply["frame"] is None:
                 time.sleep(0.2)
             if reply["frame"] is None:
-                raise TransportError("mesh reply timed out")
+                raise TransportError(
+                    f"frame sent from {self.dev_port} but no reply over the mesh — is "
+                    "junction/mesh_junction.py running on the HP (nugget-3, same channel)?")
             return unpack_message(reply["frame"])
         finally:
             iface.close()
 
 
+def resolve_mesh_port(port: str) -> str:
+    """'auto' (or empty) -> the Dell nugget's current COM port. COM numbers change on
+    every replug, so match by USB serial (LW_DELL_NUGGET_SERIAL, default nugget-1),
+    falling back to the only CH34x (VID 1A86) port present."""
+    if port and port.lower() != "auto":
+        return port
+    import os
+    from serial.tools import list_ports
+    want = os.environ.get("LW_DELL_NUGGET_SERIAL", "5A5B009671").upper()
+    ports = [p for p in list_ports.comports() if p.vid == 0x1A86]
+    for p in ports:
+        if (p.serial_number or "").upper() == want:
+            return p.device
+    if len(ports) == 1:
+        return ports[0].device
+    raise TransportError(
+        f"no Dell nugget found (serial {want}); CH34x ports present: "
+        + (", ".join(f"{p.device}={p.serial_number}" for p in ports) or "none"))
+
+
 def make_transport(spec: str):
-    """spec: 'tcp:host:port' | 'serial:COMx[:baud]' | 'mesh:COMx'."""
+    """spec: 'tcp:host:port' | 'serial:COMx[:baud]' | 'mesh:COMx' | 'mesh:auto'."""
     kind, _, rest = spec.partition(":")
     if kind == "tcp":
         host, port = rest.split(":")
@@ -113,5 +135,5 @@ def make_transport(spec: str):
         baud = int(parts[1]) if len(parts) > 1 else 115200
         return SerialTransport(port, baud)
     if kind == "mesh":
-        return MeshTransport(rest)
+        return MeshTransport(resolve_mesh_port(rest))
     raise ValueError(f"unknown transport: {spec}")

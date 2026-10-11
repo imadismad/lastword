@@ -9,7 +9,7 @@ Env (see .env.example):
   LASTWORD_RPC_URL, LASTWORD_CONTRACT_ADDRESS, BRIDGE_PRIVATE_KEY
   BRIDGE_TRANSPORT (default tcp:127.0.0.1:8766)   the transport active at startup
   BRIDGE_SIM_TRANSPORT  (default tcp:127.0.0.1:8766)  the "simulated" toggle target
-  BRIDGE_REAL_TRANSPORT (default mesh:COM8)           the "real" toggle target
+  BRIDGE_REAL_TRANSPORT (default mesh:auto)           the "real" toggle target
   BRIDGE_HOST (default 127.0.0.1), BRIDGE_PORT (default 8099)
 
 The badge transport can be switched at runtime (simulated TCP <-> real LoRa mesh) via
@@ -56,13 +56,15 @@ def _frame_key() -> bytes:
     return bytes.fromhex(hx) if hx else DEFAULT_FRAME_KEY
 
 
-def provision_badge(transport, frame_key: bytes, chain_id: int, contract_addr: bytes):
-    """HELLO (fetch pubkeys) then PROVISION (give frame key, chainId, contract)."""
+def provision_badge(transport, frame_key: bytes, chain_id: int, contract_addr: bytes,
+                    gateway_pub: bytes):
+    """HELLO (fetch pubkeys) then PROVISION (frame key, chainId, contract, gateway pubkey).
+    Payload = 32 + 8 + 20 + 64 = 124 bytes (proto/SPEC.md; badge-fw rejects any other size)."""
     cmd, data = transport.exchange(Command.HELLO)
     if cmd != Command.HELLO_OK or len(data) != 192:
         raise RuntimeError(f"badge HELLO failed: cmd=0x{cmd:02x} len={len(data)}")
     pubkeys = {"stock": data[:64].hex(), "daf": data[64:128].hex(), "duress": data[128:].hex()}
-    prov = frame_key + chain_id.to_bytes(8, "big") + contract_addr
+    prov = frame_key + chain_id.to_bytes(8, "big") + contract_addr + gateway_pub
     cmd, _ = transport.exchange(Command.PROVISION, prov)
     if cmd != Command.PROV_OK:
         raise RuntimeError(f"badge PROVISION failed: cmd=0x{cmd:02x}")
@@ -89,7 +91,8 @@ def build_flow() -> Flow:
     contract_bytes = bytes.fromhex(Web3.to_checksum_address(contract)[2:])
 
     def _provision(t):
-        pk = provision_badge(t, frame_key, chain.chain_id, contract_bytes)
+        pk = provision_badge(t, frame_key, chain.chain_id, contract_bytes,
+                             gateway.public_bytes())
         print(f"[bridge] badge provisioned. pubkeys: stock={pk['stock'][:12]}... "
               f"daf={pk['daf'][:12]}... duress={pk['duress'][:12]}...")
         return pk

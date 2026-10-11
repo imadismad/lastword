@@ -58,15 +58,35 @@ WHITELIST_FILE = os.environ.get("DASH_WHITELIST_FILE",
 # The radio this dashboard's bridge drives (the Dell nugget). When the bridge is
 # started with BRIDGE_TRANSPORT=mesh:<port>, this is the SAME port. The dashboard
 # only READS the radio for status; the bridge owns the actual send.
-MESH_DEV = os.environ.get("LW_MESH_DEV", os.environ.get("MESH_DEV", ""))  # e.g. COM8
+MESH_DEV = os.environ.get("LW_MESH_DEV", os.environ.get("MESH_DEV", ""))  # e.g. COM6
+
+
+def _detect_dell_nugget() -> str:
+    """Display-only: the Dell nugget's current COM port (by USB serial; COM numbers
+    change on replug). The bridge resolves 'mesh:auto' the same way."""
+    try:
+        from serial.tools import list_ports
+        want = os.environ.get("LW_DELL_NUGGET_SERIAL", "5A5B009671").upper()
+        ports = [p for p in list_ports.comports() if p.vid == 0x1A86]
+        for p in ports:
+            if (p.serial_number or "").upper() == want:
+                return p.device
+        return ports[0].device if len(ports) == 1 else ""
+    except Exception:
+        return ""
+
+
+_DELL_DEV = MESH_DEV or _detect_dell_nugget() or "not detected"
 # Human-readable topology for the Live-demo page (overridable via env, but these
 # defaults match the hackathon rig: Dell=bridge radio, nugget-2=battery relay, HP=junction).
 TOPOLOGY = {
     "dell": {
         "role": "bridge radio (node 1)",
         "detail": "Dashboard + Bedrock agent + I4 bridge; drives the LoRa nugget on "
-                  + (MESH_DEV or "COM8"),
-        "dev": MESH_DEV or "COM8",
+                  + _DELL_DEV,
+        # the UI polls this port for radio status: only when explicitly opted in via
+        # LW_MESH_DEV, otherwise it would fight the bridge for the same COM port
+        "dev": MESH_DEV,
     },
     "relay": {
         "role": "battery relay (node 2)",
@@ -431,7 +451,7 @@ def mesh_status(dev: str | None = None, refresh: int = 0):
     dev = (dev or MESH_DEV or "").strip()
     if not dev:
         return {"configured": False,
-                "detail": "no radio configured — set LW_MESH_DEV=COM8 (the Dell nugget "
+                "detail": "no radio configured — set LW_MESH_DEV=" + (_DELL_DEV if _DELL_DEV.startswith('COM') else 'COMx') + " (the Dell nugget "
                           "the bridge drives) to enable live mesh status"}
     now = time.time()
     if not refresh and _MESH_CACHE["data"] and now - _MESH_CACHE["t"] < 40 \

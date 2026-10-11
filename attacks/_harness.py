@@ -171,7 +171,7 @@ def make_env(lw_addr: str):
 def chain_provision(transport, chain_id: int, contract_bytes: bytes):
     c, _ = transport.exchange(Command.HELLO)
     assert c == Command.HELLO_OK
-    prov = FRAME_KEY + chain_id.to_bytes(8, "big") + contract_bytes
+    prov = FRAME_KEY + chain_id.to_bytes(8, "big") + contract_bytes + GatewayKey.from_seed().public_bytes()
     c, _ = transport.exchange(Command.PROVISION, prov)
     assert c == Command.PROV_OK
 

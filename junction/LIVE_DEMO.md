@@ -20,10 +20,10 @@ contract can approve.
 ## The three nuggets must share one channel
 
 All three nuggets must use the **same primary channel + region + modem preset**, or they
-can't hear each other. The Dell's COM8 nugget is the reference:
+can't hear each other. The Dell nugget (serial 5A5B009671, nugget-1) is the reference:
 
 - region `EU_868`, preset `LONG_FAST`, hop 3
-- channel URL: `https://meshtastic.org/e/#CgcSAQE6AggNEhYIARj6ASALKAU4A0ADSAFQG2gBwAYB`
+- channel URL: `https://meshtastic.org/e/#CgcSAQE6AggNEhQIATUAAKBBOANAA0gBUBtoAcAGAQ`
 
 Inspect any nugget and align the others to that URL with `infra/mesh_setup.py`:
 
@@ -114,7 +114,7 @@ run.
 Plug nugget 3 into the HP, align its channel, then run the junction:
 
 ```powershell
-python infra/mesh_setup.py --apply <HP COM> "https://meshtastic.org/e/#CgcSAQE6AggNEhYIARj6ASALKAU4A0ADSAFQG2gBwAYB"
+python infra/mesh_setup.py --apply <HP COM> "https://meshtastic.org/e/#CgcSAQE6AggNEhQIATUAAKBBOANAA0gBUBtoAcAGAQ"
 python junction/mesh_junction.py --dev <HP COM> --badge sim --auto
 ```
 
