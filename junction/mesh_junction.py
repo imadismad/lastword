@@ -69,27 +69,138 @@ class TcpBadge:
 
 
 class SerialBadge:
-    """Relay to a REAL badge chip over USB serial (badge-fw)."""
+    """Relay to a REAL badge chip over USB serial (badge-fw).
+
+    The badge-fw console is NOT a dumb pass-through — it needs the exact bring-up
+    the serial harness proved (badge-fw/tools/badge_serial_test.py):
+      * secure serial is ON: authenticate (AUTH <pin>) before any command;
+      * enter the binary I3 channel with the text line 'lastword-bin' (bare LF —
+        CRLF makes the badge execute on \\r and swallow \\n as a stray binary byte);
+      * the payload coming off the mesh is ALREADY a complete I3 message (the bridge
+        pack_message()'d it), so send it as-is with a leading 0x00 flush — do NOT
+        re-wrap it;
+      * the reply is interleaved with slow '[I][TR01] ...' logs and, for a REQUEST,
+        only arrives AFTER the human reads the e-paper and types the PIN on the
+        keypad. So read tolerantly and wait a long time.
+    The port is kept open across frames (PROVISION, then the stock + DAF REQUESTs
+    each arrive as separate mesh packets); we authenticate + enter binary once and
+    re-arm lazily if the session/interceptor dropped.
+    """
+
+    PIN = os.environ.get("LW_BADGE_PIN", "123456")
+
     def __init__(self, port: str, baud: int = 115200):
         import serial
         self._serial = serial
         self.port, self.baud = port, baud
         self.label = f"serial:{port}@{baud} (hardware badge)"
+        self._ser = None
+        # frozen proto codec: validate reply frames and tolerate interleaved logs
+        from lastword_proto import cobs_decode, crc16_ccitt
+        self._cobs_decode = cobs_decode
+        self._crc16 = crc16_ccitt
+
+    def _open(self):
+        if self._ser is None or not self._ser.is_open:
+            self._ser = self._serial.Serial(self.port, self.baud, timeout=0.4)
+            time.sleep(0.3)
+
+    def _drain(self, settle=0.4):
+        end = time.time() + settle
+        while time.time() < end:
+            if self._ser.read(256):
+                end = time.time() + settle
+
+    def _enter_binary(self):
+        """AUTH + install the 'lastword-bin' byte interceptor. Idempotent-ish:
+        safe to call before each frame; the badge keeps its provisioned state."""
+        s = self._ser
+        s.reset_input_buffer()
+        s.write(b"\x00\n")          # close any residual binary frame / partial line
+        s.flush()
+        self._drain(0.4)
+        s.write(f"AUTH {self.PIN}\n".encode())
+        s.flush()
+        time.sleep(0.6)
+        self._drain(0.3)
+        for _ in range(3):
+            s.reset_input_buffer()
+            s.write(b"\n\n")
+            s.flush()
+            self._drain(0.4)
+            s.reset_input_buffer()
+            s.write(b"lastword-bin\n")
+            s.flush()
+            deadline = time.time() + 1.5
+            seen = bytearray()
+            while time.time() < deadline:
+                d = s.read(256)
+                if d:
+                    seen += d
+                    if b"Executing: lastword-bin" in seen and seen.rstrip().endswith(b">"):
+                        break
+            if b"Executing: lastword-bin" in seen and b"Unknown command" not in seen:
+                s.reset_input_buffer()
+                return
+            time.sleep(3.2)         # wait out an armed interceptor's idle timeout
+        raise RuntimeError("badge did not enter binary mode: " + repr(bytes(seen[-120:])))
+
+    def _valid_frame(self, cobs_payload: bytes) -> bool:
+        try:
+            raw = self._cobs_decode(cobs_payload)
+        except Exception:
+            return False
+        if len(raw) < 5:
+            return False
+        length = int.from_bytes(raw[1:3], "big")
+        if 3 + length + 2 > len(raw):
+            return False
+        crc = int.from_bytes(raw[3 + length:3 + length + 2], "big")
+        return crc == self._crc16(raw[:3 + length])
+
+    def _read_reply(self, timeout: float) -> bytes:
+        """Return the first COBS+CRC-valid I3 reply (incl. its 0x00), ignoring any
+        interleaved log text before/after it."""
+        s = self._ser
+        deadline = time.time() + timeout
+        buf = bytearray()
+        while time.time() < deadline:
+            d = s.read(256)
+            if d:
+                buf += d
+            if 0x00 not in buf:
+                continue
+            start = 0
+            while True:
+                try:
+                    z = buf.index(0x00, start)
+                except ValueError:
+                    break
+                for st in range(start, z):
+                    cand = bytes(buf[st:z])
+                    if cand and self._valid_frame(cand):
+                        return cand + b"\x00"
+                start = z + 1
+        raise RuntimeError(f"no valid I3 reply within {timeout:.0f}s (got {len(buf)}B)")
 
     def handle(self, framed: bytes) -> bytes:
-        with self._serial.Serial(self.port, self.baud, timeout=15) as ser:
-            ser.write(framed)
-            ser.flush()
-            buf = bytearray()
-            deadline = time.time() + 15
-            while time.time() < deadline:
-                ch = ser.read(1)
-                if not ch:
-                    continue
-                buf += ch
-                if ch == b"\x00":
-                    break
-            return bytes(buf)
+        # `framed` is a complete I3 message from the bridge (PROVISION or REQUEST).
+        # REQUEST waits for a human on the badge keypad, so allow a long timeout.
+        self._open()
+        try:
+            self._enter_binary()
+            self._ser.write(b"\x00" + framed)   # leading 0x00 flushes residual state
+            self._ser.flush()
+            # generous: a DAF REQUEST needs the operator to read + PIN on the keypad
+            return self._read_reply(timeout=float(os.environ.get("LW_BADGE_TIMEOUT", "120")))
+        except Exception:
+            # drop the port so the next frame reopens cleanly
+            try:
+                self._ser.close()
+            except Exception:
+                pass
+            self._ser = None
+            raise
 
 
 def make_badge(spec: str, auto: bool):
