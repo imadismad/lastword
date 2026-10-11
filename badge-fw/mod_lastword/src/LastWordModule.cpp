@@ -12,6 +12,40 @@ namespace cdc::mod_lastword {
 // One backend instance for the module's lifetime.
 static TropicBackend g_backend;
 
+static void cdc_sink(void* /*ctx*/, const uint8_t* bytes, size_t n) {
+    // Write the framed reply straight back on the USB-CDC line.
+    for (size_t i = 0; i < n; ++i) cdc::serial::Console::putchar(static_cast<char>(bytes[i]));
+    cdc::serial::Console::flush();
+}
+
+// --- binary channel via the command-registry ByteInterceptor -----------------
+// Entering: the host sends the text command "lastword-bin". Its handler installs
+// a byte interceptor; from then on every serial byte goes to onInterceptedByte()
+// until an idle timeout removes the interceptor (so a half-sent frame can never
+// wedge the console). This is the firmware's own raw-stream mechanism; no main.cpp
+// change is needed. Defined before start() so it is in scope at registration.
+static uint64_t s_lastRxUs = 0;
+static constexpr uint64_t BINARY_IDLE_TIMEOUT_US = 3'000'000; // 3 s
+
+static void onInterceptedByte(uint8_t b) {
+    uint64_t now = static_cast<uint64_t>(esp_timer_get_time());
+    // Idle timeout: drop back to the text console if the stream stalled.
+    if (s_lastRxUs != 0 && (now - s_lastRxUs) > BINARY_IDLE_TIMEOUT_US) {
+        cdc::serial::getCommandRegistry().setByteInterceptor(nullptr);
+        s_lastRxUs = 0;
+        return;
+    }
+    s_lastRxUs = now;
+    LastWordModule::instance().feedByte(b);
+}
+
+static void cmd_lastword_bin(const char* /*args*/) {
+    // Switch the serial line into raw binary mode for LASTWORD I3 frames.
+    s_lastRxUs = static_cast<uint64_t>(esp_timer_get_time());
+    cdc::serial::getCommandRegistry().setByteInterceptor(&onInterceptedByte);
+    // No prompt/echo after this point; the host now speaks binary.
+}
+
 LastWordModule& LastWordModule::instance() {
     static LastWordModule inst;
     return inst;
@@ -69,42 +103,8 @@ void LastWordModule::onTick(uint32_t /*nowMs*/) {
     // RX path (wired in the fork). Left as a hook for timeouts if needed later.
 }
 
-static void cdc_sink(void* /*ctx*/, const uint8_t* bytes, size_t n) {
-    // Write the framed reply straight back on the USB-CDC line.
-    for (size_t i = 0; i < n; ++i) cdc::serial::Console::putchar(static_cast<char>(bytes[i]));
-    cdc::serial::Console::flush();
-}
-
 void LastWordModule::feedByte(uint8_t b) {
     proto_.feedByte(b, &cdc_sink, nullptr);
-}
-
-// --- binary channel via the command-registry ByteInterceptor -----------------
-// Entering: the host sends the text command "lastword-bin". Its handler installs
-// a byte interceptor; from then on every serial byte goes to onInterceptedByte()
-// until an idle timeout removes the interceptor (so a half-sent frame can never
-// wedge the console). This is the firmware's own raw-stream mechanism; no main.cpp
-// change is needed.
-static uint64_t s_lastRxUs = 0;
-static constexpr uint64_t BINARY_IDLE_TIMEOUT_US = 3'000'000; // 3 s
-
-static void onInterceptedByte(uint8_t b) {
-    uint64_t now = static_cast<uint64_t>(esp_timer_get_time());
-    // Idle timeout: drop back to the text console if the stream stalled.
-    if (s_lastRxUs != 0 && (now - s_lastRxUs) > BINARY_IDLE_TIMEOUT_US) {
-        cdc::serial::getCommandRegistry().setByteInterceptor(nullptr);
-        s_lastRxUs = 0;
-        return;
-    }
-    s_lastRxUs = now;
-    LastWordModule::instance().feedByte(b);
-}
-
-static void cmd_lastword_bin(const char* /*args*/) {
-    // Switch the serial line into raw binary mode for LASTWORD I3 frames.
-    s_lastRxUs = static_cast<uint64_t>(esp_timer_get_time());
-    cdc::serial::getCommandRegistry().setByteInterceptor(&onInterceptedByte);
-    // No prompt/echo after this point; the host now speaks binary.
 }
 
 uint8_t LastWordModule::getMenuItems(core::ModuleMenuItem* /*items*/, uint8_t /*maxItems*/) {

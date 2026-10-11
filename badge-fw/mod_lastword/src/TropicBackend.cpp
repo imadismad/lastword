@@ -3,10 +3,10 @@
 #include "mod_lastword/crypto.h"
 #include "cdc_hal/ISecureElement.h"
 
-// Firmware UI + input. These headers come from cdc-badge-os; the exact view API
-// is adapted in the fork (see badge-fw/README.md "UI integration"). The calls are
-// wrapped in small helpers so a UI API change touches only this file.
-#include "cdc_os_ui/AppUi.h"
+// Firmware services. For the first bring-up the approval prompt uses the serial
+// Console (fields shown, PIN read) with the real PinManager duress logic. A
+// polished e-paper ConfirmView + PinEntryView is a follow-up (see badge-fw/README).
+#include "serial_cmd/Console.h"
 #include "cdc_core/PinManager.h"
 
 #include <mbedtls/ecp.h>
@@ -61,8 +61,9 @@ static bool swGenerate(uint8_t priv[32], uint8_t pub[64]) {
         if (mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_SECP256R1) != 0) break;
         if (mbedtls_ecp_gen_keypair(&grp, &d, &Q, mbedtls_ctr_drbg_random, &drbg) != 0) break;
         if (mbedtls_mpi_write_binary(&d, priv, 32) != 0) break;
-        if (mbedtls_mpi_write_binary(&Q.X, pub, 32) != 0) break;
-        if (mbedtls_mpi_write_binary(&Q.Y, pub + 32, 32) != 0) break;
+        // mbedTLS 3.x hides struct fields behind MBEDTLS_PRIVATE().
+        if (mbedtls_mpi_write_binary(&Q.MBEDTLS_PRIVATE(X), pub, 32) != 0) break;
+        if (mbedtls_mpi_write_binary(&Q.MBEDTLS_PRIVATE(Y), pub + 32, 32) != 0) break;
         ok = true;
     } while (false);
     mbedtls_ctr_drbg_free(&drbg); mbedtls_entropy_free(&ent);
@@ -146,26 +147,48 @@ Role TropicBackend::promptAndAuthorize(const Intent& intent, Role requested,
     std::snprintf(amount, sizeof(amount), "montant %llu (tok#%u)",
                   static_cast<unsigned long long>(intent.amount), intent.token);
 
-    // AppUi::showApprovalScreen renders the banner + fields on the e-paper and,
-    // when softwareKey is true, keeps a permanent "SOFTWARE KEY" line (so the
-    // hardware guarantee is never silently implied). Returns the PIN string or
-    // empty on cancel. (Signature adapted in the fork patch.)
-    char pin[cdc::core::PinManager::PIN_MAX + 1] = {};
-    bool approved = cdc::ui::AppUi::instance().showApprovalScreen(
-        line1, benef, amount, intent.deadline, softwareKey, pin, sizeof(pin));
-    if (!approved || pin[0] == '\0') return Role::NONE;
+    // First bring-up UX: show the fields and read the PIN over the serial Console.
+    // (The e-paper ConfirmView + PinEntryView flow is a documented follow-up; it
+    // does not change what is signed or the duress semantics below.)
+    using cdc::serial::Console;
+    Console::printf("\r\n==== LASTWORD approval ====\r\n");
+    if (softwareKey) Console::printf("  [SOFTWARE KEY - hardware guarantee NOT demonstrated]\r\n");
+    Console::printf("  %s\r\n", line1);
+    Console::printf("  %s\r\n", benef);
+    Console::printf("  %s\r\n", amount);
+    Console::printf("  deadline %lu  reqId %lu\r\n",
+                    static_cast<unsigned long>(intent.deadline),
+                    static_cast<unsigned long>(intent.reqId));
+    Console::printf("  enter PIN then NEWLINE (empty = refuse): ");
 
-    // Map PIN -> role/key via PinManager. The DAF duress PIN resolves to the duress
-    // key but keeps the DAF role so the response frame is indistinguishable.
+    char pin[cdc::core::PinManager::PIN_MAX + 1] = {};
+    size_t pl = 0;
+    for (;;) {
+        int c = Console::getchar();
+        if (c < 0) continue;                       // non-blocking: spin until input
+        if (c == '\r' || c == '\n') break;
+        if (c == 0x08 || c == 0x7F) {              // backspace
+            if (pl) --pl;
+            continue;
+        }
+        if (pl < sizeof(pin) - 1) pin[pl++] = static_cast<char>(c);
+    }
+    pin[pl] = '\0';
+    if (pl == 0) { Console::printf("refused\r\n"); return Role::NONE; }
+
+    // Real duress logic (mirrors cdc-badge-os AppUi unlock): a duress PIN takes the
+    // duress path (same outward behaviour, caller stays DAF); otherwise the badge
+    // PIN approves. The chip has one badge PIN + one duress PIN, so the stock/DAF
+    // split is enforced by the signed role bits, not by distinct PINs.
     auto& pm = cdc::core::PinManager::instance();
-    if (requested == Role::STOCK) {
-        return pm.verifyRolePin("stock", pin) ? Role::STOCK : Role::NONE;
+    if (requested == Role::DAF && pm.hasDuressPin() && pm.isDuressPin(pin)) {
+        *duress = true;
+        return Role::DAF;
     }
-    if (requested == Role::DAF) {
-        if (pm.verifyRolePin("daf", pin)) return Role::DAF;
-        if (pm.verifyDuressPin(pin)) { *duress = true; return Role::DAF; }
-        return Role::NONE;
+    if (pm.verifyBadgePin(pin)) {
+        return requested; // STOCK stays STOCK, DAF stays DAF (role bits are signed)
     }
+    Console::printf("wrong PIN\r\n");
     return Role::NONE;
 }
 
