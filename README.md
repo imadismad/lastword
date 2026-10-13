@@ -102,7 +102,7 @@ transactions appear, all `status: 1`.
 That contrast — legit pays, tampered/injected does not, and the *badge* is what gates it —
 is the whole pitch.
 
-### Or drive it all from the dashboard (the showpiece)
+### Or drive it all from the dashboard (the showpiece).
 
 Instead of the CLI, run the operator console and do the whole thing in a browser:
 
